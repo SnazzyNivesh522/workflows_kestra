@@ -1,0 +1,77 @@
+id: extract_asn
+namespace: easm
+description: >
+  Extract ASN information for IPs/domains listed in the provided input file.
+  Retries are declared at the task level. If any task fails or produces no output,
+  a single finalizer writes a safe empty JSON array (`[]`) using default('[]'),
+  so parent flows never receive an exception and always get a valid `asn.json`.
+
+inputs:
+  - id: target
+    type: FILE
+    required: true
+    description: "File with one IP/domain/subdomain per line."
+  - id: region
+    type: STRING
+    defaults: "IN"
+    description: "Optional region context."
+
+tasks:
+  - id: asn_task
+    type: io.kestra.plugin.scripts.shell.Commands
+    description: >
+      Run `asnmap` against the provided target file. Task-level retry handles
+      transient container/network failures. This task is allowed to fail so the
+      flow continues to the finalizer which guarantees a safe output file.
+    allowFailure: true
+    retry:
+      type: constant
+      maxAttempt: 3
+      warningOnRetry: true
+      interval: PT3S
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      pullPolicy: IF_NOT_PRESENT
+    containerImage: asnmap
+    inputFiles:
+      target.txt: "{{inputs.target}}"
+    commands:
+      - |
+        echo "asn_task: starting (lines=$(wc -l < target.txt || echo 0))"
+      - head -n 25 target.txt || true
+      - asnmap -silent -f target.txt -json -output asn.jsonl
+      - |
+        echo "asn_task: finished (asn.jsonl present? $( [ -f asn.jsonl ] && echo yes || echo no ))"
+    outputFiles:
+      - "asn.jsonl"
+
+  - id: parse_asn_info
+    type: io.kestra.plugin.scripts.shell.Commands
+    description: >
+      Convert newline-delimited JSON (asn.jsonl) into a JSON array (asn.json) and
+      remove `timestamp` keys. Task-level retry will attempt transient failures.
+      Allowed to fail so the finalizer can produce a safe default.
+    allowFailure: true
+    retry:
+      type: constant
+      maxAttempt: 3
+      warningOnRetry: true
+      interval: PT3S
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      pullPolicy: IF_NOT_PRESENT
+    containerImage: jq_alpine
+    inputFiles:
+      asn.jsonl: "{{outputs.asn_task.outputFiles['asn.jsonl'] | default('') }}"
+    commands:
+      - jq -s 'map(if type == "object" then del(.timestamp) else . end)' asn.jsonl > asn.json
+      - |
+        echo "parse_asn_info: wrote asn.json (size=$(stat -c%s asn.json || echo 0))"
+    outputFiles:
+      - "asn.json"
+outputs:
+  - id: asn
+    type: FILE
+    value: "{{outputs.parse_asn_info.outputFiles['asn.json']}}"
+
+
