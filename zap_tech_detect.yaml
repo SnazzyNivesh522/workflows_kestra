@@ -1,0 +1,100 @@
+id: zap_tech_detect
+namespace: easm
+
+inputs:
+  - id: url
+    type: STRING
+    defaults: "https://140.245.4.54:8834"
+  - id: region
+    type: STRING
+    defaults: "IN"
+tasks:
+  - id: zaproxy_zapit
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      pullPolicy: IF_NOT_PRESENT
+      user: root
+      cpu:
+        cpus: "1"
+      # networkMode: "{{ kv(inputs.region).network_mode }}"
+    containerImage: zaproxy:tech
+    beforeCommands:
+      - PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("",0)); print(s.getsockname()[1]); s.close()')
+    commands:
+      - echo "Using following unused port for ZAPROXY ':' $PORT"
+      - zap.sh -Xmx512m -port "$PORT" -cmd -zapit {{inputs.url}} > zap_tech_output.txt
+    outputFiles:
+      - "zap_tech_output.txt"
+
+  - id: zapit_parser
+    type: io.kestra.plugin.scripts.python.Script
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      pullPolicy: IF_NOT_PRESENT
+      user: root
+    containerImage: python:3.10-slim
+    inputFiles:
+      zap_tech_output.txt: "{{outputs.zaproxy_zapit.outputFiles['zap_tech_output.txt']}}"
+    script: |
+      import re
+      from dataclasses import asdict, dataclass
+      from typing import List, Optional
+      import json
+
+      @dataclass
+      class Technology:
+          name: str
+          version: Optional[str]
+
+      @dataclass
+      class ScanResult:
+          url: str
+          technologies: List[Technology]
+
+      # Type alias for the parsed result
+      ParsedZAPitOutput = List[ScanResult]
+
+      url_regex = re.compile(r"ZAPit scan of (.*)", re.MULTILINE)
+      tech_regex = re.compile(
+          r"Technology:\s*(.*?)\s*Number of alerts",
+          re.DOTALL,
+      )
+
+      def parse_zapit(text: str) -> ParsedZAPitOutput:
+          results: ParsedZAPitOutput = []
+
+          for match in url_regex.finditer(text):
+              if match and match.group(1):
+                  results.append(ScanResult(url=match.group(1), technologies=[]))
+
+          for i, match in enumerate(tech_regex.finditer(text)):
+              if match and match.group(1) != "None":
+                  tech_block = match.group(1)
+                  if tech_block:
+                      for line in tech_block.strip().splitlines():
+                          tech_match = re.match(r"\s*(.+?)(?:\s*\(([^)]+)\))?\s*$", line)
+                          if tech_match:
+                              name, version = tech_match.groups()
+                              results[i].technologies.append(
+                                  Technology(
+                                      name=name.strip(),
+                                      version=(
+                                          version.strip()
+                                          if version and "ver" not in version
+                                          else None
+                                      ),
+                                  )
+                              )
+          return results
+      with open("zap_tech_output.txt", "r") as f:
+          parsed_data = parse_zapit(f.read())
+          print(parsed_data)
+      with open("zap_tech.json", "w") as o:
+          json.dump([asdict(data) for data in parsed_data], o)
+    outputFiles:
+      - "zap_tech.json"
+outputs:
+  - id: zap_tech
+    type: FILE
+    value: "{{outputs.zapit_parser.outputFiles['zap_tech.json']}}"
