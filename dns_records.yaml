@@ -141,9 +141,9 @@ tasks:
       print(data)
       # Always safe
       data = {
-          "dnssec": data["dnssec"]["dnssec"][0] if data["dnssec"] else {},
-          "spf": data["spf"]["spf"][0] if data["spf"] else {},
-          "dmarc": data["dmarc"]["dmarc"][0] if data["dmarc"] else {},
+          "dnssec": data["dnssec"]["dnssec"][0] if data["dnssec"]["dnssec"] else [],
+          "spf": data["spf"]["spf"][0] if data["spf"]["spf"] else [],
+          "dmarc": data["dmarc"]["dmarc"][0] if data["dmarc"]["dmarc"] else [],
           "dkim": data.get("dkim",{}).get("dkim",{}) if data["dkim"] else {},
           **data["common_dns"]
       }
