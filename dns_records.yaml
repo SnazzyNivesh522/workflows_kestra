@@ -78,43 +78,6 @@ tasks:
           maxDuration: PT1M
         allowFailure: true
 
-  # - id: combine_results
-  #   type: io.kestra.plugin.scripts.python.Script
-  #   taskRunner:
-  #     type: io.kestra.plugin.scripts.runner.docker.Docker
-  #     pullPolicy: IF_NOT_PRESENT
-  #     user: root
-  #   containerImage: python:3.10-slim
-  #   inputFiles:
-  #     records.json: |
-  #       {
-  #         "common_dns": {{ outputs.common_dns.body | default('{}')}},
-  #         "dnssec": {{ outputs.dnssec.body is not defined ? default ('[[]]') : jq('.dnssec') }},
-  #         "spf": {{ outputs.spf.body is not defined ? default ('[[]]') :  jq('.spf')  }},
-  #         "dmarc": {{ outputs.dmarc.body is not defined ? default ('[[]]') :   jq('.dmarc') }},
-  #         "dkim": {{ outputs.dkim.body is not defined ? default ('[{}]') :  jq('.dkim')}}
-  #       }
-  #   script: |
-  #     import json
-
-  #     with open("records.json") as f:
-  #         data = json.load(f)
-
-  #     data = {
-  #         "dnssec": data["dnssec"][0],
-  #         "spf": data["spf"][0],
-  #         "dmarc": data["dmarc"][0],
-  #         "dkim": data["dkim"][0],
-  #         **data["common_dns"],
-  #     }
-  #     with open("dns_intelligence.json", "w") as f:
-  #         json.dump(data, f, indent=4)
-
-  #     print("Combined DNS Records saved to dns_intelligence.json")
-
-  #   outputFiles:
-  #     - "dns_intelligence.json"
-  #     - "records.json"
   - id: combine_results
     type: io.kestra.plugin.scripts.python.Script
     taskRunner:
