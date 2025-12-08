@@ -1,16 +1,27 @@
 id: zap_tech_detect
 namespace: easm
 
+description: |
+  This flow detects technologies used by a given URL using the ZAP (Zed Attack Proxy) tool.
+
 inputs:
   - id: url
     type: STRING
     defaults: "https://140.245.4.54:8834"
+    required: true
+    description: The URL to scan for detected technologies.
   - id: region
     type: STRING
     defaults: "IN"
+    required: false
+    description: Optional region identifier for configuration (e.g., network mode).
+
 tasks:
   - id: zaproxy_zapit
     type: io.kestra.plugin.scripts.shell.Commands
+    description: |
+      This task runs a ZAP scan on the provided URL to detect technologies.
+      It dynamically selects a free port, executes the scan, and captures output to a file.
     taskRunner:
       type: io.kestra.plugin.scripts.runner.docker.Docker
       pullPolicy: IF_NOT_PRESENT
@@ -22,20 +33,37 @@ tasks:
     beforeCommands:
       - PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("",0)); print(s.getsockname()[1]); s.close()')
     commands:
+      - touch zap_tech_output.txt
       - echo "Using following unused port for ZAPROXY ':' $PORT"
-      - zap.sh -Xmx512m -port "$PORT" -cmd -zapit {{inputs.url}} > zap_tech_output.txt
+      - zap.sh -Xmx512m -port "$PORT" -cmd -zapit {{inputs.url}} > zap_tech_output.txt || echo "" > zap_tech_output.txt
     outputFiles:
       - "zap_tech_output.txt"
+    retry:
+      type: constant
+      maxAttempt: 3
+      warningOnRetry: true
+      interval: PT3S
+    allowFailure: true
 
   - id: zapit_parser
     type: io.kestra.plugin.scripts.python.Script
+    description: |
+      This task parses the raw ZAP scan output into a structured JSON format listing detected technologies.
+      The intent is to transform unstructured text into usable data; if parsing fails (e.g., invalid input format),
+      it gracefully outputs an empty JSON array as a safe default.
     taskRunner:
       type: io.kestra.plugin.scripts.runner.docker.Docker
       pullPolicy: IF_NOT_PRESENT
       user: root
     containerImage: python:3.10-slim
     inputFiles:
-      zap_tech_output.txt: "{{outputs.zaproxy_zapit.outputFiles['zap_tech_output.txt']}}"
+      zap_tech_output.txt: "{{ outputs.zaproxy_zapit.outputFiles['zap_tech_output.txt'] | default('') }}"
+    retry:
+      type: constant
+      maxAttempt: 3
+      warningOnRetry: true
+      interval: PT3S
+    allowFailure: true
     script: |
       import re
       from dataclasses import asdict, dataclass
@@ -87,14 +115,20 @@ tasks:
                                   )
                               )
           return results
-      with open("zap_tech_output.txt", "r") as f:
-          parsed_data = parse_zapit(f.read())
-          print(parsed_data)
+
+      try:
+          with open("zap_tech_output.txt", "r") as f:
+              parsed_data = parse_zapit(f.read())
+      except Exception as e:
+          print(f"Parsing failed: {e}")
+          parsed_data = []
+
       with open("zap_tech.json", "w") as o:
           json.dump([asdict(data) for data in parsed_data], o)
     outputFiles:
       - "zap_tech.json"
+
 outputs:
   - id: zap_tech
     type: FILE
-    value: "{{outputs.zapit_parser.outputFiles['zap_tech.json']}}"
+    value: "{{ outputs.zapit_parser.outputFiles['zap_tech.json'] | default('[]') }}"
