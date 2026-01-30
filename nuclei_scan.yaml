@@ -1,0 +1,189 @@
+id: nuclei_scan
+namespace: easm
+description: Run Nuclei vulnerability scanner with port range and URL support, and JSON output.
+inputs:
+- id: domain
+  type: STRING
+  required: false
+  description: Single domain to scan (e.g., example.com)
+- id: ip_cidr
+  type: STRING
+  required: false
+  description: Comma-separated IPs or CIDRs to scan (e.g., 192.168.1.1,192.168.1.0/24)
+- id: domains_or_subdomains
+  type: FILE
+  required: false
+  description: File containing domains or subdomains (one per line)
+- id: port_range
+  type: STRING
+  required: false
+  description: Ports to scan for domains/IPs (e.g., '80', '80,8080,443', '80-100,8080')
+- id: urls
+  type: STRING
+  required: false
+  description: Comma-separated URLs to scan, kept as-is (e.g., 'http://example.com,https://test.com')
+- id: templates
+  type: STRING
+  required: false
+  description: Comma-separated Nuclei templates (e.g., 'cves,exposures')
+- id: tags
+  type: STRING
+  required: false
+  description: Comma-separated Nuclei tags (e.g., 'http,ssl')
+- id: region
+  type: STRING
+  defaults: "IN"
+
+tasks:
+- id: prepare_hosts
+  type: io.kestra.plugin.scripts.python.Script
+  taskRunner:
+    type: io.kestra.plugin.scripts.runner.docker.Docker
+    pullPolicy: IF_NOT_PRESENT
+    user: root
+  containerImage: python:3.10-slim
+  description: Process inputs (domain, IP/CIDR, domains file, URLs, port range) and create hosts list
+  script: |
+    import ipaddress
+    import re
+
+    def parse_ports(port_input):
+        """Parse port input (e.g., '80,8080,44,1000-1005') into a list of ports."""
+        if not port_input or port_input == "null":
+            return []
+        ports = set()
+        for part in port_input.replace(" ", "").split(","):
+            if "-" in part:
+                start, end = map(int, part.split("-"))
+                if not (1 <= start <= 65535 and 1 <= end <= 65535):
+                    raise ValueError(f"Port range {part} out of valid range (1-65535)")
+                ports.update(range(start, end + 1))
+            else:
+                port = int(part)
+                if not 1 <= port <= 65535:
+                    raise ValueError(f"Port {port} out of valid range (1-65535)")
+                ports.add(port)
+        return sorted(ports)
+
+    def expand_cidr(cidr):
+        """Expand CIDR notation to a list of IPs."""
+        try:
+            network = ipaddress.ip_network(cidr, strict=False)
+            return [str(ip) for ip in network.hosts()]
+        except ValueError:
+            print(f"Warning: Invalid CIDR {cidr}")
+            return []
+
+    def is_valid_domain(host):
+        """Basic validation for domain names."""
+        if not host or len(host) > 255:
+            return False
+        pattern = r'^[a-zA-Z0-9][a-zA-Z0-9\-]{0,61}[a-zA-Z0-9](?:\.[a-zA-Z]{2,})+$'
+        return bool(re.match(pattern, host))
+
+    def is_valid_ip(ip):
+        """Validate IP address."""
+        try:
+            ipaddress.ip_address(ip)
+            return True
+        except ValueError:
+            return False
+
+    domain = "{{inputs.domain}}"
+    ip_cidr = "{{inputs.ip_cidr}}"
+    domains_file = "{{inputs.domains_or_subdomains}}"
+    port_input = "{{inputs.port_range}}"
+    urls_input = "{{inputs.urls}}"
+
+    hosts = []
+    ports = parse_ports(port_input)
+
+
+    if domain and domain != "null":
+        if is_valid_domain(domain):
+            hosts.append(domain)
+        else:
+            print(f"Warning: Invalid domain {domain}")
+
+    if ip_cidr and ip_cidr != "null":
+        for item in ip_cidr.split(","):
+            item = item.strip()
+            if "/" in item:
+                hosts.extend(expand_cidr(item))
+            elif is_valid_ip(item):
+                hosts.append(item)
+            else:
+                print(f"Warning: Invalid IP {item}")
+
+    if domains_file and domains_file != "null":
+        try:
+            with open(domains_file, "r") as f:
+                for line in f:
+                    host = line.strip()
+                    if host and is_valid_domain(host):
+                        hosts.append(host)
+                    else:
+                        print(f"Warning: Skipping invalid domain in file: {host}")
+        except Exception as e:
+            print(f"Warning: Error reading domains file: {e}")
+
+
+    urls = []
+    if urls_input and urls_input != "null":
+        urls = [url.strip() for url in urls_input.split(",") if url.strip()]
+
+    output_hosts = []
+    if ports:
+        for host in hosts:
+            for port in ports:
+                output_hosts.append(f"{host}:{port}")
+    else:
+        output_hosts = hosts
+
+    with open("hosts.txt", "w") as f:
+        for host in output_hosts:
+            f.write(f"{host}\n")
+        for url in urls:
+            f.write(f"{url}\n")
+  outputFiles:
+  - "hosts.txt"
+
+- id: run_nuclei_scan
+  type: io.kestra.plugin.scripts.shell.Commands
+  taskRunner:
+    type: io.kestra.plugin.scripts.runner.docker.Docker
+    pullPolicy: IF_NOT_PRESENT
+    networkMode: "{{kv(inputs.region).network_mode}}"
+    cpu:
+      cpus: "1"
+  description: Run Nuclei scanner using Docker task runner
+  containerImage: nuclei
+  inputFiles:
+    hosts.txt: "{{outputs.prepare_hosts.outputFiles['hosts.txt']}}"
+  commands:
+  - |
+    nuclei -duc -nm -l hosts.txt \
+    {{ inputs.templates is defined ? '-t ' + inputs.templates.split(',').join(' -t ') : '-t /root/nuclei-templates' }} \
+    {{ inputs.tags is defined ? '-tags ' + inputs.tags : '' }} \
+    -jsonl-export nuclei_output.jsonl -silent
+  outputFiles:
+  - "nuclei_output.jsonl"
+
+- id: convert_json_array
+  type: io.kestra.plugin.scripts.shell.Commands
+  taskRunner:
+    type: io.kestra.plugin.scripts.runner.docker.Docker
+    pullPolicy: IF_NOT_PRESENT
+    user: root
+  containerImage: jq_alpine
+  inputFiles:
+    nuclei_output.jsonl: "{{outputs.run_nuclei_scan.outputFiles['nuclei_output.jsonl']}}"
+  commands:
+  - jq -s '.' nuclei_output.jsonl > nuclei_output.json
+  outputFiles:
+  - "nuclei_output.json"
+
+outputs:
+- id: scan_result
+  type: FILE
+  value: "{{ outputs.convert_json_array.outputFiles['nuclei_output.json'] }}"
