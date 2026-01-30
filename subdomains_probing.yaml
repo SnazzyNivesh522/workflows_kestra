@@ -1,0 +1,79 @@
+id: subdomains_probing
+namespace: easm
+description: "To be run after subdomain enumeration to find live websites and content details"
+
+inputs:
+- id: subdomains
+  type: FILE
+
+- id: region
+  type: STRING
+  defaults: "IN"
+tasks:
+- id: httpx_probing
+  type: io.kestra.plugin.scripts.shell.Commands
+  taskRunner:
+    type: io.kestra.plugin.scripts.runner.docker.Docker
+    pullPolicy: IF_NOT_PRESENT
+    networkMode: "{{kv(inputs.region).network_mode}}"
+  containerImage: httpx
+  inputFiles:
+    subdomains.txt: "{{ inputs.subdomains }}"
+  commands:
+  - cat subdomains.txt | httpx -duc -silent -sc -cl -ct -location -hash md5 -jarm -rt -title -server -web-server -td -method -ip -cname -asn -cdn -tls-grab -pipeline -http2 -vhost -json -output websites1.json -irr -nf
+
+  - grep -o '"url":"[^"]*"' websites1.json | sed 's/"url":"//;s/"$//' > urls.txt
+
+  - jq -s 'group_by(.host)|map({ip:.[0].host,services:map({port:.port,url:.url,status:(.status_code//null),title:(.title//"n/a"),response_body:(.body//""),server:(.webserver//(.header.server//"n/a")),content_type:(.content_type//"n/a"),response_time:(.time//null),technologies:(.tech//[]),tls:(if .tls then {version:(.tls.tls_version//null),cipher:(.tls.cipher//null),subject_cn:(.tls.subject_cn//null),subject_org:(.tls.subject_org//[]),issuer:(.tls.issuer_cn//null),valid_from:(.tls.not_before//null),valid_to:(.tls.not_after//null),fingerprints:(.tls.fingerprint_hash//null)} else null end),redirect:(.location//null),cdn:{provider:(.cdn_name//null),type:(.cdn_type//null)},jarm:(.jarm_hash//null),asn:(.asn//null)})})' websites1.json > websites.json
+
+  outputFiles:
+  - "websites.json"
+  - "websites1.json"
+  - "urls.txt"
+- id: parallel_waf_cms
+  type: io.kestra.plugin.core.flow.Parallel
+  tasks:
+  - id: waf_check
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      pullPolicy: IF_NOT_PRESENT
+      networkMode: "{{kv(inputs.region).network_mode}}"
+    containerImage: wafw00f
+    inputFiles:
+      urls.txt: "{{outputs.httpx_probing.outputFiles['urls.txt']}}"
+    commands:
+    - "wafw00f -a -i urls.txt -o waf.json"
+    outputFiles:
+    - "waf.json"
+
+  - id: cmseek
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      pullPolicy: IF_NOT_PRESENT
+      networkMode: "{{kv(inputs.region).network_mode}}"
+    containerImage: cmseek
+    inputFiles:
+      urls.txt: "{{outputs.httpx_probing.outputFiles['urls.txt']}}"
+    commands:
+    - "python3 /opt/CMSeeK/cmseek.py --batch -r --follow-redirect --user-agent 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/51.0.2704.103 Safari/537.36' -l urls.txt  >/dev/null 2>&1"
+    - echo "[" > cms.json
+    - cat /opt/CMSeeK/Result/*/cms.json | sed 's/}{/},{/g' >> cms.json
+    - echo "]" >> cms.json
+    # - "cat /opt/CMSeeK/Result/*/cms.json | sed \"s/}{/}\\n{/g\" > cms.json"
+    outputFiles:
+    - "cms.json"
+outputs:
+- id: websites
+  type: FILE
+  value: "{{outputs.httpx_probing.outputFiles['websites.json'] }}"
+- id: urls
+  type: FILE
+  value: "{{outputs.httpx_probing.outputFiles['urls.txt']}}"
+- id: waf
+  type: FILE
+  value: "{{outputs.waf_check.outputFiles['waf.json'] }}"
+- id: cms
+  type: FILE
+  value: "{{ outputs.cmseek.outputFiles['cms.json'] }}"
