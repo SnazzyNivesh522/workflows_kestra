@@ -7,7 +7,7 @@ description: |
 inputs:
   - id: url
     type: STRING
-    defaults: "https://140.245.4.54:8834"
+    defaults: "https://sharkstriker.com"
     required: true
     description: The URL to scan for detected technologies.
   - id: region
@@ -28,7 +28,7 @@ tasks:
       user: root
       cpu:
         cpus: "1"
-      # networkMode: "{{ kv(inputs.region).network_mode }}"
+      networkMode: "{{ kv(inputs.region).network_mode }}"
     containerImage: zaproxy:tech
     beforeCommands:
       - PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("",0)); print(s.getsockname()[1]); s.close()')
