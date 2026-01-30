@@ -2,7 +2,7 @@ id: dns_records
 namespace: easm
 
 description: |
-  Robust DNS intelligence collector used as a subflow.
+  DNS intelligence collector used as a subflow.
   Fetches all DNS, DNSSEC, SPF, DMARC, DKIM records in parallel.
 
 inputs:
@@ -27,7 +27,6 @@ tasks:
           maxAttempt: 3
           warningOnRetry: true
           interval: PT2S
-          maxDuration: PT1M
         allowFailure: true
 
       - id: dnssec
@@ -42,7 +41,6 @@ tasks:
           maxAttempt: 3
           warningOnRetry: true
           interval: PT2S
-          maxDuration: PT1M
         allowFailure: true
 
       - id: spf
@@ -75,7 +73,6 @@ tasks:
           maxAttempt: 3
           warningOnRetry: true
           interval: PT2S
-          maxDuration: PT1M
         allowFailure: true
 
   - id: combine_results
@@ -104,9 +101,9 @@ tasks:
       print(data)
       # Always safe
       data = {
-          "dnssec": data["dnssec"]["dnssec"][0] if data["dnssec"]["dnssec"] else [],
-          "spf": data["spf"]["spf"][0] if data["spf"]["spf"] else [],
-          "dmarc": data["dmarc"]["dmarc"][0] if data["dmarc"]["dmarc"] else [],
+          "dnssec": data["dnssec"]["dnssec"][0] if data["dnssec"] and data["dnssec"]["dnssec"] else [],
+          "spf": data["spf"]["spf"][0] if data["spf"] and data["spf"]["spf"] else [],
+          "dmarc": data["dmarc"]["dmarc"][0] if data["dmarc"] and data["dmarc"]["dmarc"] else [],
           "dkim": data.get("dkim",{}).get("dkim",{}) if data["dkim"] else {},
           **data["common_dns"]
       }
