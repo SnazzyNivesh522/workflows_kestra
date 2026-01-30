@@ -1,6 +1,6 @@
 id: dns_records
 namespace: easm
-
+#checking if bulk updates flow
 description: |
   DNS intelligence collector used as a subflow.
   Fetches all DNS, DNSSEC, SPF, DMARC, DKIM records in parallel.
