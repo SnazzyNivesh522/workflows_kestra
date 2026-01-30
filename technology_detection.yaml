@@ -27,7 +27,7 @@ tasks:
         taskRunner:
           type: io.kestra.plugin.scripts.runner.docker.Docker
           pullPolicy: IF_NOT_PRESENT
-          # networkMode: "{{kv(inputs.region).network_mode}}"
+          networkMode: "{{kv(inputs.region).network_mode}}"
         containerImage: wappalyzer
         commands:
           - wappalyzer -i {{inputs.url}} --scan-type balanced -oJ wappalyzer_result.json
