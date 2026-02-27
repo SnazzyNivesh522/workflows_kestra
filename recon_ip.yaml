@@ -193,3 +193,46 @@ tasks:
                 type: io.kestra.plugin.core.log.Log
                 message: |
                   "{{ outputs.tech_flow | jq('to_entries | map({url: .key, technologies: .value.outputs.tech})') | flatten }}"
+
+  - id: combine_all_results
+    type: io.kestra.plugin.scripts.shell.Commands
+    description: >
+      Combine outputs from all subflows/tasks into a single
+      Elasticsearch-compatible JSON file (one document per host).
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      pullPolicy: IF_NOT_PRESENT
+      user: root
+    containerImage: python:3.10-slim
+    namespaceFiles:
+      enabled: true
+      include:
+      - combine_results.py
+    inputFiles:
+      metadata.json: |
+        {
+          "execution_id": "{{execution.id}}",
+          "flow_id": "{{flow.id}}",
+          "namespace": "{{flow.namespace}}",
+          "start_date": "{{execution.startDate}}",
+          "input_target": "{{inputs.ip_cidr}}",
+          "region": "{{inputs.region}}",
+          "openvas_report_id": "{{outputs.openvas_flow.outputs['report_id'] | default('')}}"
+        }
+      nmap_output.json: "{{ outputs.port_scan_flow.outputs['nmap_output'] | default('[]') }}"
+      websites.json: "{{ outputs.port_scan_flow.outputs['websites'] | default('[]') }}"
+      banner.json: "{{ outputs.port_scan_flow.outputs['banner'] | default('[]') }}"
+      asn.json: "{{ outputs.asn_flow.outputs['asn'] | default('[]') }}"
+      waf.json: "{{ outputs.waf_check.outputFiles['waf.json'] | default('[]') }}"
+      cms.json: "{{ outputs.cmseek.outputFiles['cms.json'] | default('[]') }}"
+      nuclei.json: "{{ outputs.nuclei_flow.outputs['scan_result'] | default('[]') }}"
+      responses.json: "{{ outputs.screeenshot_flow.outputs['responses'] | default('{}') }}"
+    commands:
+    - python3 combine_results.py
+    outputFiles:
+    - "combined_results.json"
+
+outputs:
+- id: combined_results
+  type: FILE
+  value: "{{ outputs.combine_all_results.outputFiles['combined_results.json'] }}"
