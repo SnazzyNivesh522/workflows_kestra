@@ -1,0 +1,55 @@
+id: flow_trigger
+namespace: easm
+
+description: >
+  Watches specific flows and triggers an external reporting endpoint
+  when execution completes with SUCCESS or WARNING.
+
+tasks:
+  - id: notify_service
+    type: io.kestra.plugin.core.http.Request
+    method: POST
+    uri: "{{ kv('backend').webhook_url }}"
+    contentType: application/json
+    body: |
+      {{
+        {
+          "execution_id": trigger.executionId,
+          "namespace": trigger.namespace,
+          "flow_id": trigger.flowId,
+          "status": trigger.state
+        }
+      }}
+
+  - id: log_response
+    type: io.kestra.plugin.core.log.Log
+    message: >
+      Report sent for execution {{ trigger.executionId }}
+      | Flow: {{ trigger.flowId }}
+      | Status: {{ trigger.state }}
+      | HTTP Code: {{ outputs.notify_service.code }}
+
+triggers:
+  - id: watch_flows
+    type: io.kestra.plugin.core.trigger.Flow
+    states:
+      - SUCCESS
+      - WARNING
+      - FAILED
+      - KILLED
+      - CANCELLED
+    conditions:
+      - type: io.kestra.plugin.core.condition.Or
+        conditions:
+          - type: io.kestra.plugin.core.condition.ExecutionFlow
+            namespace: "{{ flow.namespace }}"
+            flowId: recon_ip
+
+          - type: io.kestra.plugin.core.condition.ExecutionFlow
+            namespace: "{{ flow.namespace }}"
+            flowId: recon_domain
+
+          - type: io.kestra.plugin.core.condition.ExecutionFlow
+            namespace: "{{ flow.namespace }}"
+            flowId: recon_url
+    disabled: false
