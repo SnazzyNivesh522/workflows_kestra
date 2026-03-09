@@ -44,7 +44,7 @@ tasks:
       warningOnRetry: true
       interval: PT3S
     method: POST
-    uri: "http://{{kv('internal_api').wappalyzer_go.host}}:{{kv('internal_api').wappalyzer_go.port}}/analyze"
+    uri: "http://{{kv(inputs.region).internal_api.wappalyzer_go.host}}:{{kv(inputs.region).internal_api.wappalyzer_go.port}}/analyze"
     contentType: application/json
     body: |
       {

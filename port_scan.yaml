@@ -67,8 +67,9 @@ tasks:
     input.xml: "{{ outputs.rustscan_nmap.outputFiles['nmap_output.xml']}}"
   outputFiles:
   - "output.json"
+  - host_ports.json
   commands:
-  - python3 nmap_parser.py input.xml output.json
+  - python3 nmap_parser.py input.xml output.json host_ports.json
   retry:
     type: constant
     maxAttempt: 3
@@ -83,7 +84,7 @@ tasks:
   namespaceFiles:
     enabled: true
   inputFiles:
-    input.json: "{{outputs.parse_nmap_xml.outputFiles['output.json']}}"
+    input.json: "{{outputs.parse_nmap_xml.outputFiles['host_ports.json']}}"
   outputFiles:
   - ip_ports.txt
   - ports.txt
@@ -116,7 +117,61 @@ tasks:
 
     - grep -o '"url":"[^"]*"' websites1.json | sed 's/"url":"//;s/"$//' > urls.txt
 
-    - jq -s 'group_by(.host)|map({ip:.[0].host,services:map({port:.port,url:.url,status:(.status_code//null),title:(.title//"n/a"),response_body:(.body//""),server:(.webserver//(.header.server//"n/a")),content_type:(.content_type//"n/a"),response_time:(.time//null),technologies:(.tech//[]),tls:(if .tls then {version:(.tls.tls_version//null),cipher:(.tls.cipher//null),subject_cn:(.tls.subject_cn//null),subject_org:(.tls.subject_org//[]),issuer:(.tls.issuer_cn//null),valid_from:(.tls.not_before//null),valid_to:(.tls.not_after//null),fingerprints:(.tls.fingerprint_hash//null)} else null end),redirect:(.location//null),cdn:{provider:(.cdn_name//null),type:(.cdn_type//null)},jarm:(.jarm_hash//null),asn:(.asn//null)})})' websites1.json > websites.json
+    - jq -s 'group_by(.host)|map({ip:.[0].host,services:map({port:.port,url:.url,status:(.status_code//null),title:(.title//"n/a"),response_body:(.body//""),server:(.webserver//(.header.server//"n/a")),content_type:(.content_type//"n/a"),response_time:(.time//null),technologies:(.tech//[]),tls:(if .tls then {version:(.tls.tls_version//null),cipher:(.tls.cipher//null),subject_cn:(.tls.subject_cn//null),subject_org:(.tls.subject_org//[]),issuer:(.tls.issuer_cn//null),valid_from:(.tls.not_before//null),valid_to:(.tls.not_after//null),fingerprints:(.tls.fingerprint_hash//null)} else null end),redirect:(.location//null),cdn:{provider:(.cdn_name//null),type:(.cdn_type//null)},jarm:(.jarm_hash//null),asn:(.asn//null)})})' websites1.json > websites2.json
+
+    - |
+      jq -s 'group_by(.host)
+      | map({
+          ip: .[0].host,
+          services: map({
+              port: .port,
+              url: .url,
+              status: (.status_code//null),
+              title: (.title//"n/a"),
+              response_body: (.body//""),
+              server: (.webserver//(.header.server//"n/a")),
+              content_type: (.content_type//"n/a"),
+              response_time: (.time//null),
+
+              technologies: (.tech//[]),
+
+              tls: (
+                if .tls then {
+                  version: (.tls.tls_version//null),
+                  cipher: (.tls.cipher//null),
+                  subject_cn: (.tls.subject_cn//null),
+                  subject_org: (.tls.subject_org//[]),
+                  subject_dn: (.tls.subject_dn//null),        # ADDED
+                  issuer: (.tls.issuer_cn//null),
+                  issuer_dn: (.tls.issuer_dn//null),          # ADDED
+                  valid_from: (.tls.not_before//null),
+                  valid_to: (.tls.not_after//null),
+                  fingerprints: (.tls.fingerprint_hash//null)
+                }
+                else null
+              end
+              ),
+
+              # ADDED
+              cpe: (.cpe//[]),
+
+              # ADDED
+              words: (.words//null),
+              lines: (.lines//null),
+              content_length: (.content_length//null),
+
+              redirect: (.location//null),
+
+              cdn: {
+                provider: (.cdn_name//null),
+                type: (.cdn_type//null)
+              },
+
+              jarm: (.jarm_hash//null),
+              asn: (.asn//null)
+          })
+      })
+      ' websites1.json > websites.json
 
     outputFiles:
     - "websites.json"

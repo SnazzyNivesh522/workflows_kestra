@@ -27,6 +27,7 @@ tasks:
   taskRunner:
     type: io.kestra.plugin.scripts.runner.docker.Docker
     pullPolicy: IF_NOT_PRESENT
+    user: root
   containerImage: asnmap
   inputFiles:
     target.txt: "{{inputs.target}}"

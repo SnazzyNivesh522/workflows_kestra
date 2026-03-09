@@ -30,7 +30,7 @@ tasks:
     - "ls /reconftw/Recon/{{inputs.domain}}"
     - "/reconftw/reconftw.sh -d {{inputs.domain}} -c sub_passive >/dev/null 2>&1"
     - "cp /reconftw/Recon/{{inputs.domain}}/subdomains/subdomains.txt $PWD/subdomains.txt"
-    - "cat /reconftw/Recon/{{inputs.domain}}/.tmp/*.txt > $PWD/subdomains.txt"
+    # - "cat /reconftw/Recon/{{inputs.domain}}/.tmp/*.txt > $PWD/subdomains.txt"
     outputFiles:
     - "subdomains.txt"
 

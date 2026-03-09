@@ -4,192 +4,264 @@ concurrency:
   behavior: QUEUE
   limit: 20
 inputs:
-  - id: ip_cidr
-    type: STRING
-    defaults: "140.245.4.54"
-    description: "give ip cidr comma seperated 140.245.4.54,172.16.130.0/24"
+- id: ip_cidr
+  type: STRING
+  defaults: "140.245.4.54"
+  description: "give ip cidr comma seperated 140.245.4.54,172.16.130.0/24"
 
-  - id: port_range
-    type: STRING
-    description: single port range
-    required: false
-    defaults: ""
+- id: port_range
+  type: STRING
+  description: single port range
+  required: false
+  defaults: ""
 
-  - id: port_list
-    type: STRING
-    description: port list
-    required: false
-    defaults: ""
-  - id: region
-    type: STRING
-    defaults: "IN"
+- id: port_list
+  type: STRING
+  description: port list
+  required: false
+  defaults: ""
+- id: region
+  type: STRING
+  defaults: "IN"
 
 tasks:
-  - id: output_ips
-    type: io.kestra.plugin.scripts.python.Script
-    taskRunner:
-      type: io.kestra.plugin.scripts.runner.docker.Docker
-      pullPolicy: IF_NOT_PRESENT
-      user: root
-    containerImage: python:3.10-slim
-    script: |
-      import ipaddress
+- id: output_ips
+  type: io.kestra.plugin.scripts.python.Script
+  taskRunner:
+    type: io.kestra.plugin.scripts.runner.docker.Docker
+    pullPolicy: IF_NOT_PRESENT
+    user: root
+  containerImage: python:3.10-slim
+  script: |
+    import ipaddress
 
-      def expand_ips(input_str):
-          items = input_str.split(",")
-          unique_ips = set()
+    def expand_ips(input_str):
+        items = input_str.split(",")
+        unique_ips = set()
 
-          for item in items:
-              item = item.strip()
-              if not item:
-                  continue
-              try:
-                  # test for cidr fallback to ip
-                  network = ipaddress.ip_network(item, strict=False)
-                  for ip in network.hosts():  
-                      unique_ips.add(str(ip))
-              except ValueError:
-                  try:
-                      #if not cidr
-                      ip = ipaddress.ip_address(item)
-                      unique_ips.add(str(ip))
-                  except ValueError:
-                      print(f"Skipping invalid entry: {item}")
+        for item in items:
+            item = item.strip()
+            if not item:
+                continue
+            try:
+                # test for cidr fallback to ip
+                network = ipaddress.ip_network(item, strict=False)
+                for ip in network.hosts():  
+                    unique_ips.add(str(ip))
+            except ValueError:
+                try:
+                    #if not cidr
+                    ip = ipaddress.ip_address(item)
+                    unique_ips.add(str(ip))
+                except ValueError:
+                    print(f"Skipping invalid entry: {item}")
 
-          return sorted(unique_ips, key=lambda x: ipaddress.ip_address(x))
-      with open("ips.txt","w") as f:
-        for ip in expand_ips("{{inputs.ip_cidr}}"):
-          print(ip,file=f)
-      print(expand_ips("{{inputs.ip_cidr}}"))
-    outputFiles:
-      - "ips.txt"
+        return sorted(unique_ips, key=lambda x: ipaddress.ip_address(x))
+    with open("ips.txt","w") as f:
+      for ip in expand_ips("{{inputs.ip_cidr}}"):
+        print(ip,file=f)
+    print(expand_ips("{{inputs.ip_cidr}}"))
+  outputFiles:
+  - "ips.txt"
 
-  - id: port_scan_flow
+- id: port_scan_flow
+  type: io.kestra.plugin.core.flow.Subflow
+  namespace: "{{flow.namespace}}"
+  flowId: port_scan
+  inputs:
+    target: "{{inputs.ip_cidr}}"
+    port_range: "{{inputs.port_range}}"
+    port_list: "{{inputs.port_list}}"
+    region: "{{inputs.region}}"
+
+- id: parallel_detections
+  type: io.kestra.plugin.core.flow.Parallel
+  tasks:
+  - id: asn_flow
     type: io.kestra.plugin.core.flow.Subflow
     namespace: "{{flow.namespace}}"
-    flowId: port_scan
+    flowId: extract_asn
     inputs:
-      target: "{{inputs.ip_cidr}}"
-      port_range: "{{inputs.port_range}}"
-      port_list: "{{inputs.port_list}}"
+      target: "{{ outputs.output_ips.outputFiles['ips.txt']}}"
       region: "{{inputs.region}}"
 
-  - id: parallel_detections
-    type: io.kestra.plugin.core.flow.Parallel
-    tasks:
-      - id: asn_flow
-        type: io.kestra.plugin.core.flow.Subflow
-        namespace: "{{flow.namespace}}"
-        flowId: extract_asn
-        inputs:
-          target: "{{ outputs.output_ips.outputFiles['ips.txt']}}"
-          region: "{{inputs.region}}"
-
-      - id: waf_check
-        type: io.kestra.plugin.scripts.shell.Commands
-        taskRunner:
-          type: io.kestra.plugin.scripts.runner.docker.Docker
-          pullPolicy: IF_NOT_PRESENT
-          networkMode: "{{kv(inputs.region).network_mode}}"
-        containerImage: wafw00f
-        inputFiles:
-          urls.txt: "{{outputs.port_scan_flow.outputs['urls']}}"
-        commands:
-          - "wafw00f -a -i urls.txt -o waf.json"
-        outputFiles:
-          - "waf.json"
-
-      - id: cmseek
-        type: io.kestra.plugin.scripts.shell.Commands
-        taskRunner:
-          type: io.kestra.plugin.scripts.runner.docker.Docker
-          pullPolicy: IF_NOT_PRESENT
-          networkMode: "{{kv(inputs.region).network_mode}}"
-        containerImage: cmseek
-        inputFiles:
-          urls.txt: "{{outputs.port_scan_flow.outputs['urls']}}"
-        commands:
-          - "python3 /opt/CMSeeK/cmseek.py --batch -r --follow-redirect --user-agent 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/51.0.2704.103 Safari/537.36' -l urls.txt  >/dev/null 2>&1"
-          - echo "[" > cms.json
-          - cat /opt/CMSeeK/Result/*/cms.json | sed 's/}{/},{/g' >> cms.json
-          - echo "]" >> cms.json
-          # - "cat /opt/CMSeeK/Result/*/cms.json | sed \"s/}{/}\\n{/g\" > cms.json"
-        outputFiles:
-          - "cms.json"
-
-  - id: create_urls_file
+  - id: waf_check
     type: io.kestra.plugin.scripts.shell.Commands
     taskRunner:
       type: io.kestra.plugin.scripts.runner.docker.Docker
       pullPolicy: IF_NOT_PRESENT
-    containerImage: jq_alpine
+      networkMode: "{{kv(inputs.region).network_mode}}"
+    containerImage: wafw00f
     inputFiles:
-      urls.txt: "{{ outputs.port_scan_flow.outputs['urls'] }}"
+      urls.txt: "{{outputs.port_scan_flow.outputs['urls']}}"
     commands:
-      - tr '\n' ',' < urls.txt | sed 's/,$//' > urls_comma.txt
+    - "wafw00f -a -i urls.txt -o waf.json"
     outputFiles:
-      - urls_comma.txt
+    - "waf.json"
 
-  - id: parallel_va
-    type: io.kestra.plugin.core.flow.Parallel
+  - id: cmseek
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      pullPolicy: IF_NOT_PRESENT
+      networkMode: "{{kv(inputs.region).network_mode}}"
+    containerImage: cmseek
+    inputFiles:
+      urls.txt: "{{outputs.port_scan_flow.outputs['urls']}}"
+    commands:
+    - "python3 /opt/CMSeeK/cmseek.py --batch -r --follow-redirect --user-agent 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/51.0.2704.103 Safari/537.36' -l urls.txt  >/dev/null 2>&1"
+    - echo "[" > cms.json
+    - cat /opt/CMSeeK/Result/*/cms.json | sed 's/}{/},{/g' >> cms.json
+    - echo "]" >> cms.json
+    # - "cat /opt/CMSeeK/Result/*/cms.json | sed \"s/}{/}\\n{/g\" > cms.json"
+    outputFiles:
+    - "cms.json"
+
+- id: create_urls_file
+  type: io.kestra.plugin.scripts.shell.Commands
+  taskRunner:
+    type: io.kestra.plugin.scripts.runner.docker.Docker
+    pullPolicy: IF_NOT_PRESENT
+  containerImage: jq_alpine
+  inputFiles:
+    urls.txt: "{{ outputs.port_scan_flow.outputs['urls'] }}"
+  commands:
+  - tr '\n' ',' < urls.txt | sed 's/,$//' > urls_comma.txt
+  outputFiles:
+  - urls_comma.txt
+
+- id: parallel_va
+  type: io.kestra.plugin.core.flow.Parallel
+  tasks:
+  - id: nuclei_flow
+    type: io.kestra.plugin.core.flow.Subflow
+    namespace: "{{flow.namespace}}"
+    flowId: nuclei_scan
+    inputs:
+      ip_cidr: "{{inputs.ip_cidr}}"
+      urls: "{{ outputs.port_scan_flow.outputs['urls'] }}"
+      region: "{{ inputs.region }}"
+
+  - id: openvas_flow
+    type: io.kestra.plugin.core.flow.Subflow
+    namespace: "{{flow.namespace}}"
+    flowId: openvas_scan
+    inputs:
+      ip_cidr: "{{inputs.ip_cidr}}"
+      port_range: "{{inputs.port_range}}"
+      region: "{{ inputs.region }}"
+
+  - id: screeenshot_flow
+    type: io.kestra.plugin.core.flow.Subflow
+    namespace: "{{flow.namespace}}"
+    flowId: screenshot
+    inputs:
+      # urls: "{{outputs.create_urls_file.outputFiles['urls_comma.txt']}}"
+      urls: "{{ outputs.port_scan_flow.outputs['urls'] }}"
+      region: "{{ inputs.region }}"
+
+  - id: sequential_tech_detection
+    type: io.kestra.plugin.core.flow.Sequential
     tasks:
-      - id: nuclei_flow
+    - id: parse_urls_and_trim
+      type: io.kestra.plugin.scripts.shell.Commands
+      taskRunner:
+        type: io.kestra.plugin.scripts.runner.docker.Docker
+        pullPolicy: IF_NOT_PRESENT
+      containerImage: jq_alpine
+      inputFiles:
+        urls.txt: "{{outputs.port_scan_flow.outputs['urls']}}"
+      commands:
+      - |
+        jq -R -s -c 'split("\n") | map(. | gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))' urls.txt > urls_array.json
+      outputFiles:
+      - urls_array.json
+
+    - id: tech_detection_foreach_url
+      type: io.kestra.plugin.core.flow.ForEach
+      concurrencyLimit: 0
+      values: "{{ read(outputs.parse_urls_and_trim.outputFiles['urls_array.json']) }}"
+      tasks:
+      - id: tech_flow
         type: io.kestra.plugin.core.flow.Subflow
         namespace: "{{flow.namespace}}"
-        flowId: nuclei_scan
+        flowId: technology_detection
         inputs:
-          ip_cidr: "{{inputs.ip_cidr}}"
-          port_range: "{{inputs.port_range}}"
-          port_list: "{{inputs.port_list}}"
           region: "{{ inputs.region }}"
+          url: "{{ taskrun.value }}"
+      - id: log
+        type: io.kestra.plugin.core.log.Log
+        message: |
+          "{{ outputs.tech_flow | jq('to_entries | map({url: .key, technologies: .value.outputs.tech})') | flatten }}"
 
-      - id: openvas_flow
-        type: io.kestra.plugin.core.flow.Subflow
-        namespace: "{{flow.namespace}}"
-        flowId: openvas_scan
-        inputs:
-          ip_cidr: "{{inputs.ip_cidr}}"
-          port_range: "{{inputs.port_range}}"
-          region: "{{ inputs.region }}"
+#----------------------
+# Final combined parsing
+#----------------------
+- id: merge_results
+  type: io.kestra.plugin.scripts.shell.Commands
+  taskRunner:
+    type: io.kestra.plugin.scripts.runner.docker.Docker
+    pullPolicy: IF_NOT_PRESENT
+  containerImage: asm_parser
+  inputFiles:
+    asn.json: "{{outputs.asn_flow.outputs.asn}}"
+    banner.json: "{{outputs.port_scan_flow.outputs.banner}}"
+    cms.json: "{{outputs.cmseek.outputFiles['cms.json']}}"
+    waf.json: "{{outputs.waf_check.outputFiles['waf.json']}}"
+    httpx.json: "{{outputs.port_scan_flow.outputs.websites}}"
+    responses.json: "{{outputs.screeenshot_flow.outputs.responses}}"
+    technologies.json: "{{ outputs.tech_flow | jq('to_entries | map({url: .key, technologies: .value.outputs.tech})') | flatten }}"
+    nuclei.json: "{{outputs.nuclei_flow.outputs.scan_result}}"
+  commands:
+  - python3 /app/asm_parser.py combined.json
+  outputFiles:
+  - "combined.json"
 
-      - id: screeenshot_flow
-        type: io.kestra.plugin.core.flow.Subflow
-        namespace: "{{flow.namespace}}"
-        flowId: screenshot
-        inputs:
-          urls: "{{outputs.create_urls_file.outputFiles['urls_comma.txt']}}"
-          region: "{{ inputs.region }}"
+outputs:
+- id: combined
+  type: FILE
+  value: "{{outputs.merge_results.outputFiles['combined.json']}}"
 
-      - id: sequential_tech_detection
-        type: io.kestra.plugin.core.flow.Sequential
-        tasks:
-          - id: parse_urls_and_trim
-            type: io.kestra.plugin.scripts.shell.Commands
-            taskRunner:
-              type: io.kestra.plugin.scripts.runner.docker.Docker
-              pullPolicy: IF_NOT_PRESENT
-            containerImage: jq_alpine
-            inputFiles:
-              urls.txt: "{{outputs.port_scan_flow.outputs['urls']}}"
-            commands:
-              - |
-                jq -R -s -c 'split("\n") | map(. | gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))' urls.txt > urls_array.json
-            outputFiles:
-              - urls_array.json
+- id: asn
+  type: FILE
+  value: "{{outputs.asn_flow.outputs.asn}}"
 
-          - id: tech_detection_foreach_url
-            type: io.kestra.plugin.core.flow.ForEach
-            concurrencyLimit: 0
-            values: "{{ read(outputs.parse_urls_and_trim.outputFiles['urls_array.json']) }}"
-            tasks:
-              - id: tech_flow
-                type: io.kestra.plugin.core.flow.Subflow
-                namespace: "{{flow.namespace}}"
-                flowId: technology_detection
-                inputs:
-                  region: "{{ inputs.region }}"
-                  url: "{{ taskrun.value }}"
-              - id: log
-                type: io.kestra.plugin.core.log.Log
-                message: |
-                  "{{ outputs.tech_flow | jq('to_entries | map({url: .key, technologies: .value.outputs.tech})') | flatten }}"
+- id: waf
+  type: FILE
+  value: "{{outputs.waf_check.outputFiles['waf.json']}}"
+
+- id: cms
+  type: FILE
+  value: "{{outputs.cmseek.outputFiles['cms.json']}}"
+
+- id: technologies
+  type: JSON
+  value: "{{ outputs.tech_flow | jq('to_entries | map({url: .key, technologies: .value.outputs.tech})') | flatten }}"
+
+- id: screenshots
+  type: JSON
+  value: "{{outputs.screeenshot_flow.outputs.screenshots}}"
+
+- id: responses
+  type: FILE
+  value: "{{outputs.screeenshot_flow.outputs.responses}}"
+
+- id: nmap
+  type: FILE
+  value: "{{outputs.port_scan_flow.outputs.nmap_output}}"
+
+- id: banner
+  type: FILE
+  value: "{{outputs.port_scan_flow.outputs.banner}}"
+
+- id: httpx
+  type: FILE
+  value: "{{outputs.port_scan_flow.outputs.websites}}"
+
+- id: openvas_report_id
+  type: STRING
+  value: "{{outputs.openvas_flow.outputs.report_id}}"
+
+- id: nuclei
+  type: FILE
+  value: "{{outputs.nuclei_flow.outputs.scan_result}}"

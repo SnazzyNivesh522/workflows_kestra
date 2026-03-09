@@ -2,6 +2,11 @@ id: subdomains_probing
 namespace: easm
 description: "To be run after subdomain enumeration to find live websites and content details"
 
+variables:
+  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:146.0) Gecko/20100101 Firefox/146.0"
+  timeout: 12
+  retries: 3
+
 inputs:
 - id: subdomains
   type: FILE
@@ -20,11 +25,66 @@ tasks:
   inputFiles:
     subdomains.txt: "{{ inputs.subdomains }}"
   commands:
-  - cat subdomains.txt | httpx -duc -silent -sc -cl -ct -location -hash md5 -jarm -rt -title -server -web-server -td -method -ip -cname -asn -cdn -tls-grab -pipeline -http2 -vhost -json -output websites1.json -irr -nf
+  - |
+    cat subdomains.txt | httpx -duc -silent -sc -cl -ct -location -hash md5 -jarm -rt -title -server -web-server -td -method -ip -cname -asn -cdn -tls-probe -tls-grab -pipeline -http2 -vhost -json -output websites1.json -irh -irr -include-chain -nf -follow-redirects -H 'User-Agent: "{{vars.user_agent}}"' -timeout "{{vars.timeout}}" -retries "{{vars.retries}}"
 
   - grep -o '"url":"[^"]*"' websites1.json | sed 's/"url":"//;s/"$//' > urls.txt
 
-  - jq -s 'group_by(.host)|map({ip:.[0].host,services:map({port:.port,url:.url,status:(.status_code//null),title:(.title//"n/a"),response_body:(.body//""),server:(.webserver//(.header.server//"n/a")),content_type:(.content_type//"n/a"),response_time:(.time//null),technologies:(.tech//[]),tls:(if .tls then {version:(.tls.tls_version//null),cipher:(.tls.cipher//null),subject_cn:(.tls.subject_cn//null),subject_org:(.tls.subject_org//[]),issuer:(.tls.issuer_cn//null),valid_from:(.tls.not_before//null),valid_to:(.tls.not_after//null),fingerprints:(.tls.fingerprint_hash//null)} else null end),redirect:(.location//null),cdn:{provider:(.cdn_name//null),type:(.cdn_type//null)},jarm:(.jarm_hash//null),asn:(.asn//null)})})' websites1.json > websites.json
+  - jq -s 'group_by(.host)|map({ip:.[0].host,services:map({port:.port,url:.url,status:(.status_code//null),title:(.title//"n/a"),response_body:(.body//""),server:(.webserver//(.header.server//"n/a")),content_type:(.content_type//"n/a"),response_time:(.time//null),technologies:(.tech//[]),tls:(if .tls then {version:(.tls.tls_version//null),cipher:(.tls.cipher//null),subject_cn:(.tls.subject_cn//null),subject_org:(.tls.subject_org//[]),issuer:(.tls.issuer_cn//null),valid_from:(.tls.not_before//null),valid_to:(.tls.not_after//null),fingerprints:(.tls.fingerprint_hash//null)} else null end),redirect:(.location//null),cdn:{provider:(.cdn_name//null),type:(.cdn_type//null)},jarm:(.jarm_hash//null),asn:(.asn//null)})})' websites1.json > websites2.json
+
+  - |
+    jq -s 'group_by(.host)
+    | map({
+        ip: .[0].host,
+        services: map({
+            port: .port,
+            url: .url,
+            status: (.status_code//null),
+            title: (.title//"n/a"),
+            response_body: (.body//""),
+            server: (.webserver//(.header.server//"n/a")),
+            content_type: (.content_type//"n/a"),
+            response_time: (.time//null),
+
+            technologies: (.tech//[]),
+
+            tls: (
+              if .tls then {
+                version: (.tls.tls_version//null),
+                cipher: (.tls.cipher//null),
+                subject_cn: (.tls.subject_cn//null),
+                subject_org: (.tls.subject_org//[]),
+                subject_dn: (.tls.subject_dn//null),        # ADDED
+                issuer: (.tls.issuer_cn//null),
+                issuer_dn: (.tls.issuer_dn//null),          # ADDED
+                valid_from: (.tls.not_before//null),
+                valid_to: (.tls.not_after//null),
+                fingerprints: (.tls.fingerprint_hash//null)
+              }
+              else null
+            end
+            ),
+
+            # ADDED
+            cpe: (.cpe//[]),
+
+            # ADDED
+            words: (.words//null),
+            lines: (.lines//null),
+            content_length: (.content_length//null),
+
+            redirect: (.location//null),
+
+            cdn: {
+              provider: (.cdn_name//null),
+              type: (.cdn_type//null)
+            },
+
+            jarm: (.jarm_hash//null),
+            asn: (.asn//null)
+        })
+    })
+    ' websites1.json > websites.json
 
   outputFiles:
   - "websites.json"

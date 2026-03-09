@@ -119,7 +119,7 @@ tasks:
       <config id='{{ kv(inputs.region).openvas_server.config_id}}'/>
       <target id='$target_id'/>
       <scanner id='{{ kv(inputs.region).openvas_server.scanner_id}}'/>
-      
+      <alert id='{{ kv(inputs.region).openvas_server.alert_id }}'/>          
       <preferences><preference><scanner_name>max_checks</scanner_name><value>200</value></preference></preferences>
     </create_task>")
     echo "$response" > create_task_response.xml

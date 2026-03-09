@@ -10,6 +10,10 @@ inputs:
   type: STRING
   description: Domain to analyze (e.g. example.com)
   defaults: example.com
+- id: region
+  type: STRING
+  description: internal service region
+  defaults: "IN"
 
 tasks:
 - id: fetch_all_records
@@ -20,7 +24,7 @@ tasks:
     type: io.kestra.plugin.core.http.Request
     description: Full DNS records (A, MX, TXT, etc.)
     uri: >-
-      http://{{ kv('internal_api').dnsx_records.host }}:{{ kv('internal_api').dnsx_records.port }}/dns?domain={{ inputs.domain }}
+      http://{{ kv(inputs.region).internal_api.dnsx_records.host }}:{{ kv(inputs.region).internal_api.dnsx_records.port }}/dns?domain={{ inputs.domain }}
     method: GET
     retry:
       type: constant
@@ -33,7 +37,7 @@ tasks:
     type: io.kestra.plugin.core.http.Request
     description: DNSSEC keys and signatures
     uri: >-
-      http://{{ kv('internal_api').dnsx_records.host }}:{{ kv('internal_api').dnsx_records.port }}/dnssec?domain={{ inputs.domain }}
+      http://{{ kv(inputs.region).internal_api.dnsx_records.host }}:{{ kv(inputs.region).internal_api.dnsx_records.port }}/dnssec?domain={{ inputs.domain }}
     method: GET
     timeout: PT8S
     retry:
@@ -47,7 +51,7 @@ tasks:
     type: io.kestra.plugin.core.http.Request
     description: SPF records
     uri: >-
-      http://{{ kv('internal_api').dnsx_records.host }}:{{ kv('internal_api').dnsx_records.port }}/spf?domain={{ inputs.domain }}
+      http://{{ kv(inputs.region).internal_api.dnsx_records.host }}:{{ kv(inputs.region).internal_api.dnsx_records.port }}/spf?domain={{ inputs.domain }}
     method: GET
     timeout: PT6S
     allowFailure: true
@@ -56,7 +60,7 @@ tasks:
     type: io.kestra.plugin.core.http.Request
     description: DMARC policy
     uri: >-
-      http://{{ kv('internal_api').dnsx_records.host }}:{{ kv('internal_api').dnsx_records.port }}/dmarc?domain={{ inputs.domain }}
+      http://{{ kv(inputs.region).internal_api.dnsx_records.host }}:{{ kv(inputs.region).internal_api.dnsx_records.port }}/dmarc?domain={{ inputs.domain }}
     method: GET
     timeout: PT6S
     allowFailure: true
@@ -65,7 +69,7 @@ tasks:
     type: io.kestra.plugin.core.http.Request
     description: DKIM records (common selectors)
     uri: >-
-      http://{{ kv('internal_api').dnsx_records.host }}:{{ kv('internal_api').dnsx_records.port }}/dkim?domain={{ inputs.domain }}
+      http://{{ kv(inputs.region).internal_api.dnsx_records.host }}:{{ kv(inputs.region).internal_api.dnsx_records.port }}/dkim?domain={{ inputs.domain }}
     method: GET
     timeout: PT12S
     retry:

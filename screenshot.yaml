@@ -3,7 +3,7 @@ namespace: easm
 description: Take screenshot and also save response(headers and body)
 inputs:
 - id: urls
-  type: FILE
+  type: STRING
   required: false
   description: Comma-separated URLs to scan, kept as-is (e.g., 'http://example.com,https://test.com')
 - id: region
