@@ -41,10 +41,10 @@ tasks:
   containerImage: rustscan/rustscan
   commands:
   - |
-    rustscan -a {{inputs.target | replace({' ':''})}} --scan-order random {% if inputs.port_list is not empty %} -p {{ inputs.port_list }} {% elseif inputs.port_range is not empty %} --range  {{inputs.port_range}} {% else %} {% endif %} --ulimit 5000 -t 12000 -- -Pn -r -sV --version-all --script 'banner,vuln,default,discovery' -O --osscan-guess  -oX nmap_output.xml > debug.txt
+    rustscan -a {{inputs.target | replace({' ':''})}} --scan-order random {% if inputs.port_list is not empty %} -p {{ inputs.port_list }} {% elseif inputs.port_range is not empty %} --range  {{inputs.port_range}} {% else %} {% endif %} --ulimit 5000 -t 12000 -- -Pn -r -sV --version-all --script 'banner,vuln,default,discovery' -O --osscan-guess  -oX nmap_output_{{ '{{ip}}' }}.xml > debug.txt
   outputFiles:
   - "debug.txt"
-  - "nmap_output.xml"
+  - "nmap_output_*.xml"
   retry:
     type: constant
     maxAttempt: 3
