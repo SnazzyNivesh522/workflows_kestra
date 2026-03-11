@@ -8,219 +8,218 @@ variables:
   retries: 3
 
 inputs:
-- id: target
-  type: STRING
-  defaults: "localhost"
-  description: IP/CIDR/Domain
+  - id: target
+    type: STRING
+    defaults: "localhost"
+    description: IP/CIDR/Domain
 
-- id: port_range
-  type: STRING
-  description: single port range
-  required: false
-  # defaults: ""
+  - id: port_range
+    type: STRING
+    description: single port range
+    required: false
+    # defaults: ""
 
-- id: port_list
-  type: STRING
-  description: port list
-  # defaults: ""
-  required: false
+  - id: port_list
+    type: STRING
+    description: port list
+    # defaults: ""
+    required: false
 
-- id: region
-  type: STRING
-  defaults: "IN"
+  - id: region
+    type: STRING
+    defaults: "IN"
 
 tasks:
-- id: rustscan_nmap
-  type: io.kestra.plugin.scripts.shell.Commands
-  taskRunner:
-    type: io.kestra.plugin.scripts.runner.docker.Docker
-    pullPolicy: IF_NOT_PRESENT
-    user: root
-    networkMode: "{{kv(inputs.region).network_mode}}"
-    privileged: true
-  containerImage: rustscan/rustscan
-  commands:
-  - |
-    rustscan -a {{inputs.target | replace({' ':''})}} --scan-order random {% if inputs.port_list is not empty %} -p {{ inputs.port_list }} {% elseif inputs.port_range is not empty %} --range  {{inputs.port_range}} {% else %} {% endif %} --ulimit 5000 -t 12000 -- -Pn -r -sV --version-all --script 'banner,vuln,default,discovery' -O --osscan-guess  -oX nmap_output_{{ '{{ip}}' }}.xml > debug.txt
-  outputFiles:
-  - "debug.txt"
-  - "nmap_output_*.xml"
-  retry:
-    type: constant
-    maxAttempt: 3
-    warningOnRetry: true
-    interval: PT5S
-  allowFailure: true
-
-- id: parse_nmap_xml
-  type: io.kestra.plugin.scripts.shell.Commands
-  taskRunner:
-    type: io.kestra.plugin.scripts.runner.docker.Docker
-    pullPolicy: IF_NOT_PRESENT
-    user: root
-  containerImage: python:nmap
-  namespaceFiles:
-    enabled: true
-    include:
-    - nmap_parser.py
-  inputFiles:
-    input.xml: "{{ outputs.rustscan_nmap.outputFiles['nmap_output.xml']}}"
-  outputFiles:
-  - "output.json"
-  - host_ports.json
-  commands:
-  - python3 nmap_parser.py input.xml output.json host_ports.json
-  retry:
-    type: constant
-    maxAttempt: 3
-    warningOnRetry: true
-    interval: PT5S
-  allowFailure: true
-
-- id: format_as_socket
-  type: io.kestra.plugin.scripts.shell.Commands
-  taskRunner:
-    type: io.kestra.plugin.core.runner.Process
-  namespaceFiles:
-    enabled: true
-  inputFiles:
-    input.json: "{{outputs.parse_nmap_xml.outputFiles['host_ports.json']}}"
-  outputFiles:
-  - ip_ports.txt
-  - ports.txt
-  commands:
-  - python3 flatten_hosts.py input.json > ip_ports.txt
-  - python3 extract_ports.py input.json > ports.txt
-  retry:
-    type: constant
-    maxAttempt: 3
-    warningOnRetry: true
-    interval: PT5S
-  allowFailure: true
-
-- id: parallel_probe_banner
-  type: io.kestra.plugin.core.flow.Parallel
-  allowFailure: true
-  tasks:
-  - id: port_probing_httpx
+  - id: rustscan_nmap
     type: io.kestra.plugin.scripts.shell.Commands
     taskRunner:
       type: io.kestra.plugin.scripts.runner.docker.Docker
       pullPolicy: IF_NOT_PRESENT
-      networkMode: "{{kv(inputs.region).network_mode}}"
-    containerImage: httpx
-    inputFiles:
-      sockets.txt: "{{outputs.format_as_socket.outputFiles['ip_ports.txt']}}"
-    commands:
-    - |
-      cat sockets.txt | httpx -duc -silent -sc -cl -ct -location -hash md5 -jarm -rt -title -server -web-server -td -method -ip -cname -asn -cdn -tls-probe -tls-grab -pipeline -http2 -vhost -json -output websites1.json -irh -irr -include-chain -nf -follow-redirects -H 'User-Agent: "{{vars.user_agent}}"' -timeout "{{vars.timeout}}" -retries "{{vars.retries}}"
-
-    - grep -o '"url":"[^"]*"' websites1.json | sed 's/"url":"//;s/"$//' > urls.txt
-
-    - jq -s 'group_by(.host)|map({ip:.[0].host,services:map({port:.port,url:.url,status:(.status_code//null),title:(.title//"n/a"),response_body:(.body//""),server:(.webserver//(.header.server//"n/a")),content_type:(.content_type//"n/a"),response_time:(.time//null),technologies:(.tech//[]),tls:(if .tls then {version:(.tls.tls_version//null),cipher:(.tls.cipher//null),subject_cn:(.tls.subject_cn//null),subject_org:(.tls.subject_org//[]),issuer:(.tls.issuer_cn//null),valid_from:(.tls.not_before//null),valid_to:(.tls.not_after//null),fingerprints:(.tls.fingerprint_hash//null)} else null end),redirect:(.location//null),cdn:{provider:(.cdn_name//null),type:(.cdn_type//null)},jarm:(.jarm_hash//null),asn:(.asn//null)})})' websites1.json > websites2.json
-
-    - |
-      jq -s 'group_by(.host)
-      | map({
-          ip: .[0].host,
-          services: map({
-              port: .port,
-              url: .url,
-              status: (.status_code//null),
-              title: (.title//"n/a"),
-              response_body: (.body//""),
-              server: (.webserver//(.header.server//"n/a")),
-              content_type: (.content_type//"n/a"),
-              response_time: (.time//null),
-
-              technologies: (.tech//[]),
-
-              tls: (
-                if .tls then {
-                  version: (.tls.tls_version//null),
-                  cipher: (.tls.cipher//null),
-                  subject_cn: (.tls.subject_cn//null),
-                  subject_org: (.tls.subject_org//[]),
-                  subject_dn: (.tls.subject_dn//null),        # ADDED
-                  issuer: (.tls.issuer_cn//null),
-                  issuer_dn: (.tls.issuer_dn//null),          # ADDED
-                  valid_from: (.tls.not_before//null),
-                  valid_to: (.tls.not_after//null),
-                  fingerprints: (.tls.fingerprint_hash//null)
-                }
-                else null
-              end
-              ),
-
-              # ADDED
-              cpe: (.cpe//[]),
-
-              # ADDED
-              words: (.words//null),
-              lines: (.lines//null),
-              content_length: (.content_length//null),
-
-              redirect: (.location//null),
-
-              cdn: {
-                provider: (.cdn_name//null),
-                type: (.cdn_type//null)
-              },
-
-              jarm: (.jarm_hash//null),
-              asn: (.asn//null)
-          })
-      })
-      ' websites1.json > websites.json
-
-    outputFiles:
-    - "websites.json"
-    - "websites1.json"
-    - "urls.txt"
-    retry:
-      type: constant
-      maxAttempt: 3
-      warningOnRetry: true
-      interval: PT5S
-    allowFailure: true
-
-  - id: banner_grab
-    type: io.kestra.plugin.scripts.shell.Commands
-    taskRunner:
-      type: io.kestra.plugin.scripts.runner.docker.Docker
-      pullPolicy: IF_NOT_PRESENT
-      networkMode: "{{kv(inputs.region).network_mode}}"
       user: root
-    containerImage: banner_grab
-    inputFiles:
-      hosts.txt: "{{outputs.format_as_socket.outputFiles['ip_ports.txt']}}"
-    outputFiles:
-    - "results.json"
+      networkMode: "{{kv(inputs.region).network_mode}}"
+      privileged: true
+    containerImage: rustscan/rustscan
     commands:
-    - "python3 /app/banner_grab.py hosts.txt results.json >/dev/null 2>&1"
+      - |
+        rustscan -a {{inputs.target | replace({' ':''})}} --scan-order random {% if inputs.port_list is not empty %} -p {{ inputs.port_list }} {% elseif inputs.port_range is not empty %} --range  {{inputs.port_range}} {% else %} {% endif %} --ulimit 5000 -t 12000 -- -Pn -r -sV --version-all --script 'banner,vuln,default,discovery' -O --osscan-guess  -oX nmap_output_{{ '{{ip}}' }}.xml > debug.txt
+    outputFiles:
+      - "debug.txt"
+      - "nmap_output_*.xml"
     retry:
       type: constant
       maxAttempt: 3
       warningOnRetry: true
       interval: PT5S
     allowFailure: true
+
+  - id: parse_nmap_xml
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      pullPolicy: IF_NOT_PRESENT
+      user: root
+    containerImage: python:nmap
+    namespaceFiles:
+      enabled: true
+      include:
+        - nmap_parser.py
+    inputFiles: "{{ outputs.rustscan_nmap.outputFiles }}"
+    outputFiles:
+      - "output.json"
+      - host_ports.json
+    commands:
+      - python3 nmap_parser.py ./ output.json host_ports.json
+    retry:
+      type: constant
+      maxAttempt: 3
+      warningOnRetry: true
+      interval: PT5S
+    allowFailure: true
+
+  - id: format_as_socket
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    namespaceFiles:
+      enabled: true
+    inputFiles:
+      input.json: "{{outputs.parse_nmap_xml.outputFiles['host_ports.json']}}"
+    outputFiles:
+      - ip_ports.txt
+      - ports.txt
+    commands:
+      - python3 flatten_hosts.py input.json > ip_ports.txt
+      - python3 extract_ports.py input.json > ports.txt
+    retry:
+      type: constant
+      maxAttempt: 3
+      warningOnRetry: true
+      interval: PT5S
+    allowFailure: true
+
+  - id: parallel_probe_banner
+    type: io.kestra.plugin.core.flow.Parallel
+    allowFailure: true
+    tasks:
+      - id: port_probing_httpx
+        type: io.kestra.plugin.scripts.shell.Commands
+        taskRunner:
+          type: io.kestra.plugin.scripts.runner.docker.Docker
+          pullPolicy: IF_NOT_PRESENT
+          networkMode: "{{kv(inputs.region).network_mode}}"
+        containerImage: httpx
+        inputFiles:
+          sockets.txt: "{{outputs.format_as_socket.outputFiles['ip_ports.txt']}}"
+        commands:
+          - |
+            cat sockets.txt | httpx -duc -silent -sc -cl -ct -location -hash md5 -jarm -rt -title -server -web-server -td -method -ip -cname -asn -cdn -tls-probe -tls-grab -pipeline -http2 -vhost -json -output websites1.json -irh -irr -include-chain -nf -follow-redirects -H 'User-Agent: "{{vars.user_agent}}"' -timeout "{{vars.timeout}}" -retries "{{vars.retries}}"
+
+          - grep -o '"url":"[^"]*"' websites1.json | sed 's/"url":"//;s/"$//' > urls.txt
+
+          - jq -s 'group_by(.host)|map({ip:.[0].host,services:map({port:.port,url:.url,status:(.status_code//null),title:(.title//"n/a"),response_body:(.body//""),server:(.webserver//(.header.server//"n/a")),content_type:(.content_type//"n/a"),response_time:(.time//null),technologies:(.tech//[]),tls:(if .tls then {version:(.tls.tls_version//null),cipher:(.tls.cipher//null),subject_cn:(.tls.subject_cn//null),subject_org:(.tls.subject_org//[]),issuer:(.tls.issuer_cn//null),valid_from:(.tls.not_before//null),valid_to:(.tls.not_after//null),fingerprints:(.tls.fingerprint_hash//null)} else null end),redirect:(.location//null),cdn:{provider:(.cdn_name//null),type:(.cdn_type//null)},jarm:(.jarm_hash//null),asn:(.asn//null)})})' websites1.json > websites2.json
+
+          - |
+            jq -s 'group_by(.host)
+            | map({
+                ip: .[0].host,
+                services: map({
+                    port: .port,
+                    url: .url,
+                    status: (.status_code//null),
+                    title: (.title//"n/a"),
+                    response_body: (.body//""),
+                    server: (.webserver//(.header.server//"n/a")),
+                    content_type: (.content_type//"n/a"),
+                    response_time: (.time//null),
+
+                    technologies: (.tech//[]),
+
+                    tls: (
+                      if .tls then {
+                        version: (.tls.tls_version//null),
+                        cipher: (.tls.cipher//null),
+                        subject_cn: (.tls.subject_cn//null),
+                        subject_org: (.tls.subject_org//[]),
+                        subject_dn: (.tls.subject_dn//null),        # ADDED
+                        issuer: (.tls.issuer_cn//null),
+                        issuer_dn: (.tls.issuer_dn//null),          # ADDED
+                        valid_from: (.tls.not_before//null),
+                        valid_to: (.tls.not_after//null),
+                        fingerprints: (.tls.fingerprint_hash//null)
+                      }
+                      else null
+                    end
+                    ),
+
+                    # ADDED
+                    cpe: (.cpe//[]),
+
+                    # ADDED
+                    words: (.words//null),
+                    lines: (.lines//null),
+                    content_length: (.content_length//null),
+
+                    redirect: (.location//null),
+
+                    cdn: {
+                      provider: (.cdn_name//null),
+                      type: (.cdn_type//null)
+                    },
+
+                    jarm: (.jarm_hash//null),
+                    asn: (.asn//null)
+                })
+            })
+            ' websites1.json > websites.json
+
+        outputFiles:
+          - "websites.json"
+          - "websites1.json"
+          - "urls.txt"
+        retry:
+          type: constant
+          maxAttempt: 3
+          warningOnRetry: true
+          interval: PT5S
+        allowFailure: true
+
+      - id: banner_grab
+        type: io.kestra.plugin.scripts.shell.Commands
+        taskRunner:
+          type: io.kestra.plugin.scripts.runner.docker.Docker
+          pullPolicy: IF_NOT_PRESENT
+          networkMode: "{{kv(inputs.region).network_mode}}"
+          user: root
+        containerImage: banner_grab
+        inputFiles:
+          hosts.txt: "{{outputs.format_as_socket.outputFiles['ip_ports.txt']}}"
+        outputFiles:
+          - "results.json"
+        commands:
+          - "python3 /app/banner_grab.py hosts.txt results.json >/dev/null 2>&1"
+        retry:
+          type: constant
+          maxAttempt: 3
+          warningOnRetry: true
+          interval: PT5S
+        allowFailure: true
 
 outputs:
-- id: socket_pair
-  type: FILE
-  value: "{{outputs.format_as_socket.outputFiles['ip_ports.txt']}}"
-- id: websites
-  type: FILE
-  value: "{{ outputs.port_probing_httpx.outputFiles['websites.json'] }}"
-- id: urls
-  type: FILE
-  value: "{{outputs.port_probing_httpx.outputFiles['urls.txt']}}"
-- id: banner
-  type: FILE
-  value: "{{outputs.banner_grab.outputFiles['results.json']}}"
-- id: ports
-  type: FILE
-  value: "{{outputs.format_as_socket.outputFiles['ports.txt']}}"
-- id: nmap_output
-  type: FILE
-  value: "{{outputs.parse_nmap_xml.outputFiles['output.json']}}"
+  - id: socket_pair
+    type: FILE
+    value: "{{outputs.format_as_socket.outputFiles['ip_ports.txt']}}"
+  - id: websites
+    type: FILE
+    value: "{{ outputs.port_probing_httpx.outputFiles['websites.json'] }}"
+  - id: urls
+    type: FILE
+    value: "{{outputs.port_probing_httpx.outputFiles['urls.txt']}}"
+  - id: banner
+    type: FILE
+    value: "{{outputs.banner_grab.outputFiles['results.json']}}"
+  - id: ports
+    type: FILE
+    value: "{{outputs.format_as_socket.outputFiles['ports.txt']}}"
+  - id: nmap_output
+    type: FILE
+    value: "{{outputs.parse_nmap_xml.outputFiles['output.json']}}"
