@@ -179,7 +179,7 @@ tasks:
           networkMode: "{{kv(inputs.region).network_mode}}"
           cpu:
             cpus: 4
-        containerImage: "nuclei"
+        containerImage: "nuclei:test"
         inputFiles:
           targets.txt: "{{outputs.prepare_targets.outputFiles['targets.txt']}}"
         commands:
@@ -202,7 +202,7 @@ tasks:
           networkMode: "{{kv(inputs.region).network_mode}}"
           cpu:
             cpus: 2
-        containerImage: "nuclei"
+        containerImage: "nuclei:test"
         inputFiles:
           targets.txt: "{{outputs.prepare_targets.outputFiles['targets.txt']}}"
         commands:
@@ -224,7 +224,7 @@ tasks:
           networkMode: "{{kv(inputs.region).network_mode}}"
           cpu:
             cpus: 2
-        containerImage: "nuclei"
+        containerImage: "nuclei:test"
         inputFiles:
           targets.txt: "{{outputs.prepare_targets.outputFiles['targets.txt']}}"
         commands:
@@ -245,11 +245,11 @@ tasks:
       pullPolicy: IF_NOT_PRESENT
     containerImage: jq_alpine
     inputFiles:
-      headless.json: "{{outputs.headless_nuclei.outputFiles['headless.jsonl']}}"
-      dast.json: "{{outputs.dast_nuclei.outputFiles['dast.jsonl']}}"
-      core.json: "{{outputs.dast_nuclei.outputFiles['core.jsonl']}}"
+      headless.jsonl: "{{outputs.headless_nuclei.outputFiles['headless.jsonl']}}"
+      dast.jsonl: "{{outputs.dast_nuclei.outputFiles['dast.jsonl']}}"
+      core.jsonl: "{{outputs.core_nuclei.outputFiles['core.jsonl']}}"
     commands:
-      - cat headless.json dast.json core.json > all.jsonl
+      - cat headless.jsonl dast.jsonl core.jsonl > all.jsonl
       - jq -s '.' all.jsonl > nuclei_output.json
     outputFiles:
       - "nuclei_output.json"
