@@ -1,5 +1,6 @@
 id: nuclei_scan
-namespace: test
+namespace: easm
+description: Nuclei workflow with validated target expansion, safety caps, and high-throughput scanning.
 
 inputs:
   - id: ip_cidr
