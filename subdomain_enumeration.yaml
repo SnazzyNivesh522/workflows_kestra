@@ -93,7 +93,7 @@ tasks:
 
       # Write to output file
       with open("combined_domains.json", "w") as f:
-          json.dump(sorted(all_domains),f)
+          json.dump({"{{inputs.domain}}":sorted(all_domains)},f)
     outputFiles:
       - combined_domains.json
 
