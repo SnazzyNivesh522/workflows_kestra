@@ -6,118 +6,118 @@ description: |
   Fetches all DNS, DNSSEC, SPF, DMARC, DKIM records in parallel.
 
 inputs:
-- id: domain
-  type: STRING
-  description: Domain to analyze (e.g. example.com)
-  defaults: example.com
-- id: region
-  type: STRING
-  description: internal service region
-  defaults: "IN"
+  - id: domain
+    type: STRING
+    description: Domain to analyze (e.g. example.com)
+    defaults: example.com
+  - id: region
+    type: STRING
+    description: internal service region
+    defaults: "IN"
 
 tasks:
-- id: fetch_all_records
-  type: io.kestra.plugin.core.flow.Parallel
-  allowFailure: true
-  tasks:
-  - id: common_dns
-    type: io.kestra.plugin.core.http.Request
-    description: Full DNS records (A, MX, TXT, etc.)
-    uri: >-
-      http://{{ kv(inputs.region).internal_api.dnsx_records.host }}:{{ kv(inputs.region).internal_api.dnsx_records.port }}/dns?domain={{ inputs.domain }}
-    method: GET
-    retry:
-      type: constant
-      maxAttempt: 3
-      warningOnRetry: true
-      interval: PT2S
+  - id: fetch_all_records
+    type: io.kestra.plugin.core.flow.Parallel
     allowFailure: true
+    tasks:
+      - id: common_dns
+        type: io.kestra.plugin.core.http.Request
+        description: Full DNS records (A, MX, TXT, etc.)
+        uri: >-
+          http://{{ kv(inputs.region).internal_api.dnsx_records.host }}:{{ kv(inputs.region).internal_api.dnsx_records.port }}/dns?domain={{ inputs.domain }}
+        method: GET
+        retry:
+          type: constant
+          maxAttempt: 3
+          warningOnRetry: true
+          interval: PT2S
+        allowFailure: true
 
-  - id: dnssec
-    type: io.kestra.plugin.core.http.Request
-    description: DNSSEC keys and signatures
-    uri: >-
-      http://{{ kv(inputs.region).internal_api.dnsx_records.host }}:{{ kv(inputs.region).internal_api.dnsx_records.port }}/dnssec?domain={{ inputs.domain }}
-    method: GET
-    timeout: PT8S
-    retry:
-      type: constant
-      maxAttempt: 3
-      warningOnRetry: true
-      interval: PT2S
-    allowFailure: true
+      - id: dnssec
+        type: io.kestra.plugin.core.http.Request
+        description: DNSSEC keys and signatures
+        uri: >-
+          http://{{ kv(inputs.region).internal_api.dnsx_records.host }}:{{ kv(inputs.region).internal_api.dnsx_records.port }}/dnssec?domain={{ inputs.domain }}
+        method: GET
+        timeout: PT8S
+        retry:
+          type: constant
+          maxAttempt: 3
+          warningOnRetry: true
+          interval: PT2S
+        allowFailure: true
 
-  - id: spf
-    type: io.kestra.plugin.core.http.Request
-    description: SPF records
-    uri: >-
-      http://{{ kv(inputs.region).internal_api.dnsx_records.host }}:{{ kv(inputs.region).internal_api.dnsx_records.port }}/spf?domain={{ inputs.domain }}
-    method: GET
-    timeout: PT6S
-    allowFailure: true
+      - id: spf
+        type: io.kestra.plugin.core.http.Request
+        description: SPF records
+        uri: >-
+          http://{{ kv(inputs.region).internal_api.dnsx_records.host }}:{{ kv(inputs.region).internal_api.dnsx_records.port }}/spf?domain={{ inputs.domain }}
+        method: GET
+        timeout: PT6S
+        allowFailure: true
 
-  - id: dmarc
-    type: io.kestra.plugin.core.http.Request
-    description: DMARC policy
-    uri: >-
-      http://{{ kv(inputs.region).internal_api.dnsx_records.host }}:{{ kv(inputs.region).internal_api.dnsx_records.port }}/dmarc?domain={{ inputs.domain }}
-    method: GET
-    timeout: PT6S
-    allowFailure: true
+      - id: dmarc
+        type: io.kestra.plugin.core.http.Request
+        description: DMARC policy
+        uri: >-
+          http://{{ kv(inputs.region).internal_api.dnsx_records.host }}:{{ kv(inputs.region).internal_api.dnsx_records.port }}/dmarc?domain={{ inputs.domain }}
+        method: GET
+        timeout: PT6S
+        allowFailure: true
 
-  - id: dkim
-    type: io.kestra.plugin.core.http.Request
-    description: DKIM records (common selectors)
-    uri: >-
-      http://{{ kv(inputs.region).internal_api.dnsx_records.host }}:{{ kv(inputs.region).internal_api.dnsx_records.port }}/dkim?domain={{ inputs.domain }}
-    method: GET
-    timeout: PT12S
-    retry:
-      type: constant
-      maxAttempt: 3
-      warningOnRetry: true
-      interval: PT2S
-    allowFailure: true
+      - id: dkim
+        type: io.kestra.plugin.core.http.Request
+        description: DKIM records (common selectors)
+        uri: >-
+          http://{{ kv(inputs.region).internal_api.dnsx_records.host }}:{{ kv(inputs.region).internal_api.dnsx_records.port }}/dkim?domain={{ inputs.domain }}
+        method: GET
+        timeout: PT12S
+        retry:
+          type: constant
+          maxAttempt: 3
+          warningOnRetry: true
+          interval: PT2S
+        allowFailure: true
 
-- id: combine_results
-  type: io.kestra.plugin.scripts.python.Script
-  taskRunner:
-    type: io.kestra.plugin.scripts.runner.docker.Docker
-    pullPolicy: IF_NOT_PRESENT
-    user: root
-  containerImage: python:3.10-slim
+  - id: combine_results
+    type: io.kestra.plugin.scripts.python.Script
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      pullPolicy: IF_NOT_PRESENT
+      user: root
+    containerImage: python:3.10-slim
 
-  inputFiles:
-    records.json: |
-      {
-        "common_dns": {{ outputs.common_dns.body | default("{}") }},
-        "dnssec": {{ outputs.dnssec.body | default("[]") }},
-        "spf": {{ outputs.spf.body | default("[]") }},
-        "dmarc": {{ outputs.dmarc.body | default("[]") }},
-        "dkim": {{ outputs.dkim.body | default("[]") }}
+    inputFiles:
+      records.json: |
+        {
+          "common_dns": {{ outputs.common_dns.body | default("{}") }},
+          "dnssec": {{ outputs.dnssec.body | default("[]") }},
+          "spf": {{ outputs.spf.body | default("[]") }},
+          "dmarc": {{ outputs.dmarc.body | default("[]") }},
+          "dkim": {{ outputs.dkim.body | default("[]") }}
+        }
+
+    script: |
+      import json
+
+      with open("records.json") as f:
+          data = json.load(f)
+      print(data)
+      # Always safe
+      data = {
+          "dnssec": data["dnssec"]["dnssec"][0] if data["dnssec"] and data["dnssec"]["dnssec"] else [],
+          "spf": data["spf"]["spf"][0] if data["spf"] and data["spf"]["spf"] else [],
+          "dmarc": data["dmarc"]["dmarc"][0] if data["dmarc"] and data["dmarc"]["dmarc"] else [],
+          "dkim": data.get("dkim",{}).get("dkim",{}) if data["dkim"] else {},
+          **data["common_dns"]
       }
 
-  script: |
-    import json
+      with open("dns_intelligence.json", "w") as f:
+          json.dump(data, f, indent=4)
 
-    with open("records.json") as f:
-        data = json.load(f)
-    print(data)
-    # Always safe
-    data = {
-        "dnssec": data["dnssec"]["dnssec"][0] if data["dnssec"] and data["dnssec"]["dnssec"] else [],
-        "spf": data["spf"]["spf"][0] if data["spf"] and data["spf"]["spf"] else [],
-        "dmarc": data["dmarc"]["dmarc"][0] if data["dmarc"] and data["dmarc"]["dmarc"] else [],
-        "dkim": data.get("dkim",{}).get("dkim",{}) if data["dkim"] else {},
-        **data["common_dns"]
-    }
-
-    with open("dns_intelligence.json", "w") as f:
-        json.dump(data, f, indent=4)
-
-  outputFiles:
-  - dns_intelligence.json
+    outputFiles:
+      - dns_intelligence.json
 outputs:
-- id: dns_records
-  type: FILE
-  value: "{{outputs.combine_results.outputFiles['dns_intelligence.json']}}"
+  - id: dns_records
+    type: FILE
+    value: "{{outputs.combine_results.outputFiles['dns_intelligence.json']}}"
