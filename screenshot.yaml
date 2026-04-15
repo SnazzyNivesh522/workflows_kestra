@@ -22,7 +22,7 @@ tasks:
         description: Run Nuclei scanner using Docker task runner
         containerImage: web_screenshot
         inputFiles:
-          urls.txt: "{{inputs.urls}}"
+          urls.txt: "{{inputs.urls | split(',') | join('\n') }}"
         commands:
           - screenshot -input urls.txt -output screenshots -workers 3 -timeout 30 2>&1
         outputFiles:
@@ -37,7 +37,7 @@ tasks:
         containerImage: url_response
         description: Getting response headers and body into json format
         inputFiles:
-          urls.txt: "{{inputs.urls}}"
+          urls.txt: "{{inputs.urls | split(',') | join('\n') }}"
         commands:
           - response
         outputFiles:
