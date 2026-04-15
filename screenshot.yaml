@@ -2,50 +2,50 @@ id: screenshot
 namespace: easm
 description: Take screenshot and also save response(headers and body)
 inputs:
-- id: urls
-  type: STRING
-  required: false
-  description: Comma-separated URLs to scan, kept as-is (e.g., 'http://example.com,https://test.com')
-- id: region
-  type: STRING
-  defaults: "IN"
+  - id: urls
+    type: STRING
+    required: false
+    description: Comma-separated URLs to scan, kept as-is (e.g., 'http://example.com,https://test.com')
+  - id: region
+    type: STRING
+    defaults: "IN"
 tasks:
-- id: parallel_response_screenshot
-  type: io.kestra.plugin.core.flow.Parallel
-  tasks:
-  - id: screenshot_chromedp_go
-    type: io.kestra.plugin.scripts.shell.Commands
-    taskRunner:
-      type: io.kestra.plugin.scripts.runner.docker.Docker
-      pullPolicy: IF_NOT_PRESENT
-      networkMode: "{{kv(inputs.region).network_mode}}"
-    description: Run Nuclei scanner using Docker task runner
-    containerImage: web_screenshot
-    inputFiles:
-      urls.txt: "{{inputs.urls}}"
-    commands:
-    - screenshot 2>&1
-    outputFiles:
-    - "screenshots/*.png"
+  - id: parallel_response_screenshot
+    type: io.kestra.plugin.core.flow.Parallel
+    tasks:
+      - id: screenshot_chromedp_go
+        type: io.kestra.plugin.scripts.shell.Commands
+        taskRunner:
+          type: io.kestra.plugin.scripts.runner.docker.Docker
+          pullPolicy: IF_NOT_PRESENT
+          networkMode: "{{kv(inputs.region).network_mode}}"
+        description: Run Nuclei scanner using Docker task runner
+        containerImage: web_screenshot
+        inputFiles:
+          urls.txt: "{{inputs.urls}}"
+        commands:
+          - screenshot -input urls.txt -output screenshots -workers 3 -timeout 30 2>&1
+        outputFiles:
+          - "screenshots/*.png"
 
-  - id: get_response_content
-    type: io.kestra.plugin.scripts.shell.Commands
-    taskRunner:
-      type: io.kestra.plugin.scripts.runner.docker.Docker
-      pullPolicy: IF_NOT_PRESENT
-      networkMode: "{{kv(inputs.region).network_mode}}"
-    containerImage: url_response
-    description: Getting response headers and body into json format
-    inputFiles:
-      urls.txt: "{{inputs.urls}}"
-    commands:
-    - response
-    outputFiles:
-    - "responses.json"
+      - id: get_response_content
+        type: io.kestra.plugin.scripts.shell.Commands
+        taskRunner:
+          type: io.kestra.plugin.scripts.runner.docker.Docker
+          pullPolicy: IF_NOT_PRESENT
+          networkMode: "{{kv(inputs.region).network_mode}}"
+        containerImage: url_response
+        description: Getting response headers and body into json format
+        inputFiles:
+          urls.txt: "{{inputs.urls}}"
+        commands:
+          - response
+        outputFiles:
+          - "responses.json"
 outputs:
-- id: screenshots
-  type: JSON
-  value: "{{ outputs.screenshot_chromedp_go.outputFiles }}"
-- id: responses
-  type: FILE
-  value: "{{ outputs.get_response_content.outputFiles['responses.json'] }}"
+  - id: screenshots
+    type: JSON
+    value: "{{ outputs.screenshot_chromedp_go.outputFiles }}"
+  - id: responses
+    type: FILE
+    value: "{{ outputs.get_response_content.outputFiles['responses.json'] }}"
