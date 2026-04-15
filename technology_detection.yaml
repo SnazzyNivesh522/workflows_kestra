@@ -4,142 +4,142 @@ description: |
   Robust technology detection using 3 engines: wappalyzer-next, wappalyzer-go, and ZAP.
 
 inputs:
-- id: url
-  type: STRING
-  defaults: "https://140.245.4.54:8834"
-- id: region
-  type: STRING
-  defaults: "IN"
+  - id: url
+    type: STRING
+    defaults: "https://140.245.4.54:8834"
+  - id: region
+    type: STRING
+    defaults: "IN"
 
 tasks:
-- id: parallel_tech_detection
-  type: io.kestra.plugin.core.flow.Parallel
-  allowFailure: true
-  tasks:
-  - id: wappalyzer_next
-    type: io.kestra.plugin.scripts.shell.Commands
-    description: "wappalyzer (next) via Docker"
-    retry:
-      type: constant
-      maxAttempt: 3
-      warningOnRetry: true
-      interval: PT3S
+  - id: parallel_tech_detection
+    type: io.kestra.plugin.core.flow.Parallel
+    allowFailure: true
+    tasks:
+      - id: wappalyzer_next
+        type: io.kestra.plugin.scripts.shell.Commands
+        description: "wappalyzer (next) via Docker"
+        retry:
+          type: constant
+          maxAttempt: 3
+          warningOnRetry: true
+          interval: PT3S
+        taskRunner:
+          type: io.kestra.plugin.scripts.runner.docker.Docker
+          pullPolicy: IF_NOT_PRESENT
+          networkMode: "{{kv(inputs.region).network_mode}}"
+        containerImage: wappalyzer
+        commands:
+          - wappalyzer -i {{inputs.url}} --scan-type balanced -oJ wappalyzer_result.json
+        outputFiles:
+          - wappalyzer_result.json
+        allowFailure: true
+
+      - id: wappalyzer_go
+        type: io.kestra.plugin.core.http.Request
+        description: "Go-based Wappalyzer API"
+        retry:
+          type: constant
+          maxAttempt: 3
+          warningOnRetry: true
+          interval: PT3S
+        method: POST
+        uri: "http://{{kv(inputs.region).internal_api.wappalyzer_go.host}}:{{kv(inputs.region).internal_api.wappalyzer_go.port}}/analyze"
+        contentType: application/json
+        body: |
+          {
+            "urls": ["{{ inputs.url }}"]
+          }
+        allowFailure: true
+
+      - id: zap_tech_detect_subflow
+        type: io.kestra.plugin.core.flow.Subflow
+        description: "ZAP passive tech detection"
+        namespace: easm
+        flowId: zap_tech_detect
+        inputs:
+          url: "{{ inputs.url }}"
+          region: "{{ inputs.region }}"
+        allowFailure: true
+
+  # Merge results — resilient to missing/failed scanners
+  - id: combine_technologies
+    type: io.kestra.plugin.scripts.python.Script
+    description: "Merge all 3 scanner outputs safely"
     taskRunner:
       type: io.kestra.plugin.scripts.runner.docker.Docker
       pullPolicy: IF_NOT_PRESENT
-      networkMode: "{{kv(inputs.region).network_mode}}"
-    containerImage: wappalyzer
-    commands:
-    - wappalyzer -i {{inputs.url}} --scan-type balanced -oJ wappalyzer_result.json
+      user: root
+    containerImage: python:3.10-slim
+    inputFiles:
+      wappalyzer_next.json: "{{ outputs.wappalyzer_next.outputFiles['wappalyzer_result.json'] | default('{}')}}"
+      zap_tech.json: "{{outputs.zap_tech_detect_subflow.outputs['zap_tech'] | default('[]') }}"
+    script: |
+      import json
+      def parse_wappalyzer_next(result:dict):
+          wn_results={}
+          for url,technologies in result.items():
+              for tech,details in technologies.items():
+                  wn_results[tech]=details.get("version","")
+          return wn_results
+      def parse_wappalyzer_go(result:dict):
+          wg_results={}
+          if not result.get("results",{}):
+              return wg_results
+          else:
+              result=result.get("results",{})
+          for tech in result.get("{{inputs.url}}",[]):
+              temp=tech.split(":")
+              name=temp[0]
+              version=""
+              if len(temp)>1:
+                version=temp[1]
+              wg_results[name]=version
+          return wg_results
+
+      def parse_zaproxy_tech(result: list | dict):
+          if isinstance(result, list):
+              result = result[0]  # handle list case
+          zt_result = {}
+          for tech in result["technologies"]:
+              zt_result[tech["name"]] = tech["version"] or ""
+          return zt_result
+
+      def combine_results(wn_results, wg_results, zt_result):
+          final_technologies = wn_results.copy()
+
+          for tech, version in wg_results.items():
+              if not final_technologies.get(tech):
+                  final_technologies[tech] = version
+              elif not final_technologies[tech] and version:
+                  final_technologies[tech] = version
+
+          for tech, version in zt_result.items():
+              if not final_technologies.get(tech):
+                  final_technologies[tech] = version
+              elif not final_technologies[tech] and version:
+                  final_technologies[tech] = version
+
+          return final_technologies
+      with open("wappalyzer_next.json","r") as f:
+          r1=json.load(f)
+      with open("zap_tech.json","r") as f:
+          r2=json.load(f)
+      r3 = json.loads("""{{outputs.wappalyzer_go.body | default ('{}')}}""")
+
+      wn_results,wg_results,zt_result=parse_wappalyzer_next(r1),parse_wappalyzer_go(r3),parse_zaproxy_tech(r2)
+      final_technologies=combine_results(wn_results,wg_results,zt_result)
+      with open("final_tech.json","w") as final:
+          json.dump(final_technologies,final)
     outputFiles:
-    - wappalyzer_result.json
-    allowFailure: true
-
-  - id: wappalyzer_go
-    type: io.kestra.plugin.core.http.Request
-    description: "Go-based Wappalyzer API"
-    retry:
-      type: constant
-      maxAttempt: 3
-      warningOnRetry: true
-      interval: PT3S
-    method: POST
-    uri: "http://{{kv(inputs.region).internal_api.wappalyzer_go.host}}:{{kv(inputs.region).internal_api.wappalyzer_go.port}}/analyze"
-    contentType: application/json
-    body: |
-      {
-        "urls": ["{{ inputs.url }}"]
-      }
-    allowFailure: true
-
-  - id: zap_tech_detect_subflow
-    type: io.kestra.plugin.core.flow.Subflow
-    description: "ZAP passive tech detection"
-    namespace: easm
-    flowId: zap_tech_detect
-    inputs:
-      url: "{{ inputs.url }}"
-      region: "{{ inputs.region }}"
-    allowFailure: true
-
-# Merge results — resilient to missing/failed scanners
-- id: combine_technologies
-  type: io.kestra.plugin.scripts.python.Script
-  description: "Merge all 3 scanner outputs safely"
-  taskRunner:
-    type: io.kestra.plugin.scripts.runner.docker.Docker
-    pullPolicy: IF_NOT_PRESENT
-    user: root
-  containerImage: python:3.10-slim
-  inputFiles:
-    wappalyzer_next.json: "{{ outputs.wappalyzer_next.outputFiles['wappalyzer_result.json'] | default('{}')}}"
-    zap_tech.json: "{{outputs.zap_tech_detect_subflow.outputs['zap_tech'] | default('[]') }}"
-  script: |
-    import json
-    def parse_wappalyzer_next(result:dict):
-        wn_results={}
-        for url,technologies in result.items():
-            for tech,details in technologies.items():
-                wn_results[tech]=details.get("version","")
-        return wn_results
-    def parse_wappalyzer_go(result:dict):
-        wg_results={}
-        if not result.get("results",{}):
-            return wg_results
-        else:
-            result=result.get("results",{})
-        for tech in result.get("{{inputs.url}}",[]):
-            temp=tech.split(":")
-            name=temp[0]
-            version=""
-            if len(temp)>1:
-              version=temp[1]
-            wg_results[name]=version
-        return wg_results
-
-    def parse_zaproxy_tech(result: list | dict):
-        if isinstance(result, list):
-            result = result[0]  # handle list case
-        zt_result = {}
-        for tech in result["technologies"]:
-            zt_result[tech["name"]] = tech["version"] or ""
-        return zt_result
-
-    def combine_results(wn_results, wg_results, zt_result):
-        final_technologies = wn_results.copy()
-
-        for tech, version in wg_results.items():
-            if not final_technologies.get(tech):
-                final_technologies[tech] = version
-            elif not final_technologies[tech] and version:
-                final_technologies[tech] = version
-
-        for tech, version in zt_result.items():
-            if not final_technologies.get(tech):
-                final_technologies[tech] = version
-            elif not final_technologies[tech] and version:
-                final_technologies[tech] = version
-
-        return final_technologies
-    with open("wappalyzer_next.json","r") as f:
-        r1=json.load(f)
-    with open("zap_tech.json","r") as f:
-        r2=json.load(f)
-    r3 = json.loads("""{{outputs.wappalyzer_go.body | default ('{}')}}""")
-
-    wn_results,wg_results,zt_result=parse_wappalyzer_next(r1),parse_wappalyzer_go(r3),parse_zaproxy_tech(r2)
-    final_technologies=combine_results(wn_results,wg_results,zt_result)
-    with open("final_tech.json","w") as final:
-        json.dump(final_technologies,final)
-  outputFiles:
-  - "final_tech.json"
+      - "final_tech.json"
 
 outputs:
-- id: tech
-  type: JSON
-  description: 'Final merged technology map: { "React": "18.2.0", "Nginx": "1.24", ... }'
-  value: "{{ read(outputs.combine_technologies.outputFiles['final_tech.json']) }}"
+  - id: tech
+    type: JSON
+    description: 'Final merged technology map: { "React": "18.2.0", "Nginx": "1.24", ... }'
+    value: "{{ read(outputs.combine_technologies.outputFiles['final_tech.json']) }}"
 
-- id: detection_success
-  type: BOOLEAN
-  value: "{{ read(outputs.combine_technologies.outputFiles['final_tech.json']) == '' ? false : true }}"
+  - id: detection_success
+    type: BOOLEAN
+    value: "{{ read(outputs.combine_technologies.outputFiles['final_tech.json']) == '' ? false : true }}"
