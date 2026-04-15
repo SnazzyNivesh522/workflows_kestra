@@ -3,168 +3,168 @@ namespace: easm
 description: Start OpenVAS scan using target info (IP, ports) and additional IDs (config, scanner, alert)
 
 inputs:
-- id: domain
-  type: STRING
-  required: false
-- id: ip_cidr
-  type: STRING
-  required: false
-- id: domains_or_subdomains
-  type: FILE
-  required: false
-- id: port_range
-  type: STRING
-  required: false
+  - id: domain
+    type: STRING
+    required: false
+  - id: ip_cidr
+    type: STRING
+    required: false
+  - id: domains_or_subdomains
+    type: FILE
+    required: false
+  - id: port_range
+    type: STRING
+    required: false
 
-- id: name
-  type: STRING
-  defaults: "EASM Stag Scan -"
+  - id: name
+    type: STRING
+    defaults: "EASM Stag Scan -"
 
-- id: region
-  type: STRING
-  defaults: "IN"
+  - id: region
+    type: STRING
+    defaults: "IN"
 
 tasks:
-- id: prepare_hosts
-  type: io.kestra.plugin.scripts.python.Script
-  taskRunner:
-    type: io.kestra.plugin.scripts.runner.docker.Docker
-    pullPolicy: IF_NOT_PRESENT
-    user: root
-  containerImage: python:3.10-slim
-  description: Process inputs and create comma-separated hosts list
-  script: |
-    import json
+  - id: prepare_hosts
+    type: io.kestra.plugin.scripts.python.Script
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      pullPolicy: IF_NOT_PRESENT
+      user: root
+    containerImage: python:3.10-slim
+    description: Process inputs and create comma-separated hosts list
+    script: |
+      import json
 
-    # Get inputs
-    domain = "{{inputs.domain}}"
-    ip_cidr = "{{inputs.ip_cidr}}"
-    domains_file = "{{inputs.domains_or_subdomains}}"
+      # Get inputs
+      domain = "{{inputs.domain}}"
+      ip_cidr = "{{inputs.ip_cidr}}"
+      domains_file = "{{inputs.domains_or_subdomains}}"
 
-    hosts = []
+      hosts = []
 
-    # Handle single domain
-    if domain and domain != "null":
-        hosts.append(domain)
-        
-    # Handle IP/CIDR
-    if ip_cidr and ip_cidr != "null":
-        hosts.append(ip_cidr)
-        
-    # Handle domains file
-    if domains_file and domains_file != "null":
-        with open(domains_file, 'r') as f:
-            for line in f:
-                host = line.strip()
-                if host:
-                    hosts.append(host)
+      # Handle single domain
+      if domain and domain != "null":
+          hosts.append(domain)
+          
+      # Handle IP/CIDR
+      if ip_cidr and ip_cidr != "null":
+          hosts.append(ip_cidr)
+          
+      # Handle domains file
+      if domains_file and domains_file != "null":
+          with open(domains_file, 'r') as f:
+              for line in f:
+                  host = line.strip()
+                  if host:
+                      hosts.append(host)
 
-    # Create comma-separated string
-    hosts_str = ",".join(hosts) if hosts else ""
+      # Create comma-separated string
+      hosts_str = ",".join(hosts) if hosts else ""
 
-    # Output the result
-    with open("hosts.txt", "w") as f:
-        f.write(hosts_str)
-  outputFiles:
-  - hosts.txt
+      # Output the result
+      with open("hosts.txt", "w") as f:
+          f.write(hosts_str)
+    outputFiles:
+      - hosts.txt
 
-- id: openvas_scan
-  type: io.kestra.plugin.scripts.shell.Commands
-  taskRunner:
-    type: io.kestra.plugin.scripts.runner.docker.Docker
-    pullPolicy: IF_NOT_PRESENT
-  containerImage: registry.community.greenbone.net/community/gvm-tools:latest
-  beforeCommands:
-  - |
-    echo "[gmp]
-    username=admin
-    password=admin
-    [tls]
-    hostname={{kv(inputs.region).openvas_server.ip}}
-    port={{kv(inputs.region).openvas_server.gvm_port}}" > gvm-tools.conf
-  commands:
-  # Create Target
-  - |
-    echo "Creating target..."
-    HOSTS=$(cat "{{outputs.prepare_hosts.outputFiles['hosts.txt']}}")
-    FINAL_HOSTS=$HOSTS
-    response=$(runuser -u gvm -- gvm-cli -c gvm-tools.conf tls -X "<create_target>
-      <name>{{inputs.name}}{{execution.id}}</name>
-      <hosts>$FINAL_HOSTS</hosts>
-      {% if inputs.port_range is defined and inputs.port_range!='' %}
-        <port_range>{{inputs.port_range}}</port_range>
-      {% else %}
-        <port_list id='33d0cd82-57c6-11e1-8ed1-406186ea4fc5'/>
-      {% endif %}
-      <alive_tests>Consider Alive</alive_tests>
-    </create_target>")
-    echo "$response" > create_target_response.xml
+  - id: openvas_scan
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      pullPolicy: IF_NOT_PRESENT
+    containerImage: registry.community.greenbone.net/community/gvm-tools:latest
+    beforeCommands:
+      - |
+        echo "[gmp]
+        username=admin
+        password=admin
+        [tls]
+        hostname={{kv(inputs.region).openvas_server.ip}}
+        port={{kv(inputs.region).openvas_server.gvm_port}}" > gvm-tools.conf
+    commands:
+      # Create Target
+      - |
+        echo "Creating target..."
+        HOSTS=$(cat "{{outputs.prepare_hosts.outputFiles['hosts.txt']}}")
+        FINAL_HOSTS=$HOSTS
+        response=$(runuser -u gvm -- gvm-cli -c gvm-tools.conf tls -X "<create_target>
+          <name>{{inputs.name}}{{execution.id}}</name>
+          <hosts>$FINAL_HOSTS</hosts>
+          {% if inputs.port_range is defined and inputs.port_range!='' %}
+            <port_range>{{inputs.port_range}}</port_range>
+          {% else %}
+            <port_list id='33d0cd82-57c6-11e1-8ed1-406186ea4fc5'/>
+          {% endif %}
+          <alive_tests>Consider Alive</alive_tests>
+        </create_target>")
+        echo "$response" > create_target_response.xml
 
-  - |
-    status=$(echo "$response" | python3 -c "import xml.etree.ElementTree as ET; import sys; tree = ET.fromstring(sys.stdin.read()); print(tree.get('status', ''))")
-    if [ "$status" != "201" ]; then 
-      echo "Target creation failed: $response" >&2
-      exit 1
-    fi
-    target_id=$(echo "$response" | python3 -c "import xml.etree.ElementTree as ET; tree = ET.fromstring(input()); print(tree.get('id', ''))")
-    echo "Target created with ID: $target_id"
+      - |
+        status=$(echo "$response" | python3 -c "import xml.etree.ElementTree as ET; import sys; tree = ET.fromstring(sys.stdin.read()); print(tree.get('status', ''))")
+        if [ "$status" != "201" ]; then 
+          echo "Target creation failed: $response" >&2
+          exit 1
+        fi
+        target_id=$(echo "$response" | python3 -c "import xml.etree.ElementTree as ET; tree = ET.fromstring(input()); print(tree.get('id', ''))")
+        echo "Target created with ID: $target_id"
 
-  # Create Task with Pre-Defined Alert
-  # <alert id='{{ kv(inputs.region).openvas_server.alert_id }}'/>
-  - |
-    echo "Creating task..."
-    response=$(runuser -u gvm -- gvm-cli -c gvm-tools.conf tls -X "<create_task>
-      <name>{{inputs.name}}-{{execution.id}} Scan</name>
-      <comment>Automated scan</comment>
-      <config id='{{ kv(inputs.region).openvas_server.config_id}}'/>
-      <target id='$target_id'/>
-      <scanner id='{{ kv(inputs.region).openvas_server.scanner_id}}'/>
-      <alert id='{{ kv(inputs.region).openvas_server.alert_id }}'/>          
-      <preferences><preference><scanner_name>max_checks</scanner_name><value>200</value></preference></preferences>
-    </create_task>")
-    echo "$response" > create_task_response.xml
+      # Create Task with Pre-Defined Alert
+      # <alert id='{{ kv(inputs.region).openvas_server.alert_id }}'/>
+      - |
+        echo "Creating task..."
+        response=$(runuser -u gvm -- gvm-cli -c gvm-tools.conf tls -X "<create_task>
+          <name>{{inputs.name}}-{{execution.id}} Scan</name>
+          <comment>Automated scan</comment>
+          <config id='{{ kv(inputs.region).openvas_server.config_id}}'/>
+          <target id='$target_id'/>
+          <scanner id='{{ kv(inputs.region).openvas_server.scanner_id}}'/>
+          <alert id='{{ kv(inputs.region).openvas_server.alert_id }}'/>          
+          <preferences><preference><scanner_name>max_checks</scanner_name><value>200</value></preference></preferences>
+        </create_task>")
+        echo "$response" > create_task_response.xml
 
-  - |
-    status=$(echo "$response" | python3 -c "import xml.etree.ElementTree as ET; import sys; tree = ET.fromstring(sys.stdin.read()); print(tree.get('status', ''))")
-    if [ "$status" != "201" ]; then 
-      echo "Task creation failed: $response" >&2
-      exit 1
-    fi
-    task_id=$(echo "$response" | python3 -c "import xml.etree.ElementTree as ET; tree = ET.fromstring(input()); print(tree.get('id', ''))")
-    echo "Task created with ID: $task_id"
+      - |
+        status=$(echo "$response" | python3 -c "import xml.etree.ElementTree as ET; import sys; tree = ET.fromstring(sys.stdin.read()); print(tree.get('status', ''))")
+        if [ "$status" != "201" ]; then 
+          echo "Task creation failed: $response" >&2
+          exit 1
+        fi
+        task_id=$(echo "$response" | python3 -c "import xml.etree.ElementTree as ET; tree = ET.fromstring(input()); print(tree.get('id', ''))")
+        echo "Task created with ID: $task_id"
 
-  # Start Scan and Extract Report ID
-  - |
-    echo "Starting scan for Task ID: $task_id..."
-    response=$(runuser -u gvm -- gvm-cli -c gvm-tools.conf tls -X "<start_task task_id='$task_id'/>")
-    echo "$response" > scan_start_response.xml
+      # Start Scan and Extract Report ID
+      - |
+        echo "Starting scan for Task ID: $task_id..."
+        response=$(runuser -u gvm -- gvm-cli -c gvm-tools.conf tls -X "<start_task task_id='$task_id'/>")
+        echo "$response" > scan_start_response.xml
 
-  - |
-    status=$(echo "$response" | python3 -c "import xml.etree.ElementTree as ET; import sys; tree = ET.fromstring(sys.stdin.read()); print(tree.get('status', ''))")
-    echo "$status"
-    if [ "$status" != "202" ]; then 
-      echo "Scan start failed with status $status: $response" >&2
-      exit 1
-    fi
+      - |
+        status=$(echo "$response" | python3 -c "import xml.etree.ElementTree as ET; import sys; tree = ET.fromstring(sys.stdin.read()); print(tree.get('status', ''))")
+        echo "$status"
+        if [ "$status" != "202" ]; then 
+          echo "Scan start failed with status $status: $response" >&2
+          exit 1
+        fi
 
-  # Extract Report ID directly from response
-  - |
-    report_id=$(echo "$response" | python3 -c "import xml.etree.ElementTree as ET, sys; tree = ET.fromstring(sys.stdin.read()); print(tree.find('report_id').text if tree.find('report_id') is not None else 'none')")
-    if [ "$report_id" = "none" ]; then
-      echo "Report ID not found. OpenVAS will send it via alert."
-    else
-      echo "Report ID: $report_id"
-      echo "$report_id" > report_id.txt
-    fi
+      # Extract Report ID directly from response
+      - |
+        report_id=$(echo "$response" | python3 -c "import xml.etree.ElementTree as ET, sys; tree = ET.fromstring(sys.stdin.read()); print(tree.find('report_id').text if tree.find('report_id') is not None else 'none')")
+        if [ "$report_id" = "none" ]; then
+          echo "Report ID not found. OpenVAS will send it via alert."
+        else
+          echo "Report ID: $report_id"
+          echo "$report_id" > report_id.txt
+        fi
 
-  timeout: PT5M
-  outputFiles:
-  - create_target_response.xml
-  - create_task_response.xml
-  - scan_start_response.xml
-  - report_id.txt
+    timeout: PT5M
+    outputFiles:
+      - create_target_response.xml
+      - create_task_response.xml
+      - scan_start_response.xml
+      - report_id.txt
 
 outputs:
-- id: report_id
-  type: STRING
-  value: "{{read(outputs.openvas_scan.outputFiles['report_id.txt']) | trim }}"
+  - id: report_id
+    type: STRING
+    value: "{{read(outputs.openvas_scan.outputFiles['report_id.txt']) | trim }}"
