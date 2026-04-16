@@ -1,0 +1,251 @@
+id: recon_domain
+namespace: easm
+description: Domain-focused reconnaissance pipeline that orchestrates enumeration, probing, scanning, and technology detection.
+concurrency:
+  behavior: QUEUE
+  limit: 20
+
+inputs:
+  - id: domain
+    type: STRING
+    defaults: "linuxsocials.com"
+
+  - id: region
+    type: STRING
+    defaults: "IN"
+
+tasks:
+  - id: create_domain_file
+    type: io.kestra.plugin.core.storage.Write
+    content: "{{ inputs.domain }}\n"
+    extension: .txt
+
+  - id: subdomain_enum_flow
+    type: io.kestra.plugin.core.flow.Subflow
+    namespace: "{{ flow.namespace }}"
+    flowId: subdomain_enumeration
+    inputs:
+      domain: "{{ inputs.domain }}"
+      region: "{{ inputs.region }}"
+
+  - id: build_scope_files
+    type: io.kestra.plugin.scripts.python.Script
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      pullPolicy: IF_NOT_PRESENT
+      user: root
+    containerImage: python:3.10-slim
+    script: |
+      import json
+
+      root_domain = "{{ inputs.domain }}".strip()
+      raw = """{{ outputs.subdomain_enum_flow.outputs.subdomains | default('{}') }}"""
+
+      try:
+          parsed = json.loads(raw) if raw and raw != "null" else {}
+      except Exception:
+          parsed = {}
+
+      enum_subdomains = parsed.get(root_domain, []) if isinstance(parsed, dict) else []
+      enum_subdomains = [s.strip() for s in enum_subdomains if isinstance(s, str) and s.strip()]
+
+      # Keep deterministic order and include the root domain in scope.
+      all_domains = sorted(set([root_domain] + enum_subdomains))
+      subdomains_only = sorted(set(enum_subdomains))
+
+      with open("scope_domains.txt", "w", encoding="utf-8") as f:
+          for item in all_domains:
+              f.write(f"{item}\n")
+
+      with open("subdomains.txt", "w", encoding="utf-8") as f:
+          for item in subdomains_only:
+              f.write(f"{item}\n")
+    outputFiles:
+      - scope_domains.txt
+      - subdomains.txt
+
+  - id: parallel_recon
+    type: io.kestra.plugin.core.flow.Parallel
+    tasks:
+      - id: port_scan_flow
+        type: io.kestra.plugin.core.flow.Subflow
+        namespace: "{{ flow.namespace }}"
+        flowId: port_scan
+        inputs:
+          target: "{{ inputs.domain }}"
+          region: "{{ inputs.region }}"
+
+      - id: subdomain_probe_flow
+        type: io.kestra.plugin.core.flow.Subflow
+        namespace: "{{ flow.namespace }}"
+        flowId: subdomains_probing
+        inputs:
+          subdomains: "{{ outputs.build_scope_files.outputFiles['subdomains.txt'] }}"
+          region: "{{ inputs.region }}"
+
+      - id: asn_flow
+        type: io.kestra.plugin.core.flow.Subflow
+        namespace: "{{ flow.namespace }}"
+        flowId: extract_asn
+        inputs:
+          target: "{{ outputs.build_scope_files.outputFiles['scope_domains.txt'] }}"
+          region: "{{ inputs.region }}"
+
+      - id: dns_recon_flow
+        type: io.kestra.plugin.core.flow.Subflow
+        namespace: "{{ flow.namespace }}"
+        flowId: dns_records
+        inputs:
+          domain: "{{ inputs.domain }}"
+          region: "{{ inputs.region }}"
+
+  - id: merge_urls
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      pullPolicy: IF_NOT_PRESENT
+      memory:
+        memory: "256Mb"
+    containerImage: jq_alpine
+    inputFiles:
+      port_urls.txt: "{{ outputs.port_scan_flow.outputs['urls'] }}"
+      subdomain_urls.txt: "{{ outputs.subdomain_probe_flow.outputs['urls'] }}"
+    outputFiles:
+      - urls.txt
+      - urls_array.json
+      - urls_comma.txt
+    commands:
+      - cat port_urls.txt subdomain_urls.txt | sed '/^\s*$/d' | awk '!seen[$0]++' > urls.txt
+      - jq -R -s -c 'split("\n") | map(. | gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))' urls.txt > urls_array.json
+      - tr '\n' ',' < urls.txt | sed 's/,$//' > urls_comma.txt
+
+  - id: parallel_va
+    type: io.kestra.plugin.core.flow.Parallel
+    tasks:
+      - id: nuclei_flow
+        type: io.kestra.plugin.core.flow.Subflow
+        namespace: "{{ flow.namespace }}"
+        flowId: nuclei_scan
+        inputs:
+          domains: "{{ inputs.domain }}"
+          urls: "{{ read(outputs.merge_urls.outputFiles['urls_comma.txt']) }}"
+          region: "{{ inputs.region }}"
+
+      - id: openvas_flow
+        type: io.kestra.plugin.core.flow.Subflow
+        namespace: "{{ flow.namespace }}"
+        flowId: openvas_scan
+        inputs:
+          domain: "{{ inputs.domain }}"
+          domains_or_subdomains: "{{ outputs.build_scope_files.outputFiles['scope_domains.txt'] }}"
+          region: "{{ inputs.region }}"
+
+      - id: screenshot_flow
+        type: io.kestra.plugin.core.flow.Subflow
+        namespace: "{{ flow.namespace }}"
+        flowId: screenshot
+        inputs:
+          urls: "{{ read(outputs.merge_urls.outputFiles['urls_comma.txt']) }}"
+          region: "{{ inputs.region }}"
+
+      - id: debug_urls
+        type: io.kestra.plugin.core.log.Log
+        message: "{{ read(outputs.merge_urls.outputFiles['urls_array.json']) }}"
+
+      - id: tech_detection_foreach_url
+        type: io.kestra.plugin.core.flow.ForEach
+        concurrencyLimit: 1
+        values: "{{ read(outputs.merge_urls.outputFiles['urls_array.json']) }}"
+        tasks:
+          - id: tech_flow
+            type: io.kestra.plugin.core.flow.Subflow
+            namespace: "{{ flow.namespace }}"
+            flowId: technology_detection
+            inputs:
+              region: "{{ inputs.region }}"
+              url: "{{ taskrun.value }}"
+
+  - id: merge_results
+    type: io.kestra.plugin.scripts.shell.Commands
+    taskRunner:
+      type: io.kestra.plugin.scripts.runner.docker.Docker
+      pullPolicy: IF_NOT_PRESENT
+      # user: asmparser
+    containerImage: asm_parser
+    inputFiles:
+      asn.json: "{{ outputs.asn_flow.outputs.asn }}"
+      dns.json: "{{ outputs.dns_recon_flow.outputs.dns_records }}"
+      banner.json: "{{ outputs.port_scan_flow.outputs.banner }}"
+      subdomains.json: "{{ outputs.subdomain_enum_flow.outputs.subdomains }}"
+      cms.json: "{{ outputs.subdomain_probe_flow.outputs.cms }}"
+      waf.json: "{{ outputs.subdomain_probe_flow.outputs.waf }}"
+      httpx.json: "{{ outputs.port_scan_flow.outputs.websites }}"
+      responses.json: "{{ outputs.screenshot_flow.outputs.responses }}"
+      technologies.json: "{{ outputs.tech_flow | jq('to_entries | map({url: .key, technologies: .value.outputs.tech})') | flatten }}"
+      nuclei.json: "{{ outputs.nuclei_flow.outputs.scan_result }}"
+    commands:
+      - asm-parser --parser all --input-dir . --format json combined.json
+    outputFiles:
+      - combined.json
+      - combined.metrics.json
+
+outputs:
+  - id: combined
+    type: FILE
+    value: "{{ outputs.merge_results.outputFiles['combined.json'] }}"
+
+  - id: asn
+    type: FILE
+    value: "{{ outputs.asn_flow.outputs.asn }}"
+
+  - id: dns_records
+    type: FILE
+    value: "{{ outputs.dns_recon_flow.outputs.dns_records }}"
+
+  - id: subdomains
+    type: JSON
+    value: "{{ outputs.subdomain_enum_flow.outputs.subdomains }}"
+
+  - id: waf
+    type: FILE
+    value: "{{ outputs.subdomain_probe_flow.outputs.waf }}"
+
+  - id: cms
+    type: FILE
+    value: "{{ outputs.subdomain_probe_flow.outputs.cms }}"
+
+  - id: technologies
+    type: JSON
+    value: "{{ outputs.tech_flow | jq('to_entries | map({url: .key, technologies: .value.outputs.tech})') | flatten }}"
+
+  - id: screenshots
+    type: JSON
+    value: "{{ outputs.screenshot_flow.outputs.screenshots }}"
+
+  - id: responses
+    type: FILE
+    value: "{{ outputs.screenshot_flow.outputs.responses }}"
+
+  - id: urls
+    type: FILE
+    value: "{{ outputs.merge_urls.outputFiles['urls.txt'] }}"
+
+  - id: nmap
+    type: FILE
+    value: "{{ outputs.port_scan_flow.outputs.nmap_output }}"
+
+  - id: banner
+    type: FILE
+    value: "{{ outputs.port_scan_flow.outputs.banner }}"
+
+  - id: httpx
+    type: FILE
+    value: "{{ outputs.port_scan_flow.outputs.websites }}"
+
+  - id: openvas_report_id
+    type: STRING
+    value: "{{ outputs.openvas_flow.outputs.report_id }}"
+
+  - id: nuclei
+    type: FILE
+    value: "{{ outputs.nuclei_flow.outputs.scan_result }}"
