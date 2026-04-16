@@ -202,10 +202,11 @@ tasks:
     taskRunner:
       type: io.kestra.plugin.scripts.runner.docker.Docker
       pullPolicy: IF_NOT_PRESENT
+      # user: asmparser
     containerImage: asm_parser
     inputFiles:
       asn.json: "{{outputs.asn_flow.outputs.asn}}"
-      banner.json: "{{outputs.port_scan_flow.outputs.banner}}"
+      # banner.json: "{{outputs.port_scan_flow.outputs.banner}}"
       cms.json: "{{outputs.cmseek.outputFiles['cms.json']}}"
       waf.json: "{{outputs.waf_check.outputFiles['waf.json']}}"
       httpx.json: "{{outputs.port_scan_flow.outputs.websites}}"
@@ -213,9 +214,10 @@ tasks:
       technologies.json: "{{ outputs.tech_flow | jq('to_entries | map({url: .key, technologies: .value.outputs.tech})') | flatten }}"
       nuclei.json: "{{outputs.nuclei_flow.outputs.scan_result}}"
     commands:
-      - python3 /app/asm_parser.py combined.json
+      - asm-parser --parser all --input-dir . --format json combined.json
     outputFiles:
-      - "combined.json"
+      - combined.json
+      - combined.metrics.json
 
 outputs:
   - id: combined
